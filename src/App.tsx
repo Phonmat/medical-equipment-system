@@ -178,7 +178,7 @@ function MainLayout() {
             <button
               type="button"
               onClick={toggleDarkMode}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border transition-all cursor-pointer active:scale-95 ${
+              className={`flex items-center justify-center w-9 h-9 rounded-xl border transition-all cursor-pointer active:scale-95 ${
                 isDarkMode
                   ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700'
                   : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
@@ -187,15 +187,9 @@ function MainLayout() {
               aria-label={isDarkMode ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด'}
             >
               {isDarkMode ? (
-                <>
-                  <Sun size={15} className="text-amber-400 shrink-0" />
-                  <span className="hidden sm:inline">โหมดสว่าง</span>
-                </>
+                <Sun size={17} className="text-amber-400 shrink-0" />
               ) : (
-                <>
-                  <Moon size={15} className="text-slate-600 shrink-0" />
-                  <span className="hidden sm:inline">โหมดมืด</span>
-                </>
+                <Moon size={17} className="text-slate-600 shrink-0" />
               )}
             </button>
 
