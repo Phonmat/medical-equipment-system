@@ -17,7 +17,9 @@ import {
   Camera,
   Upload,
   Trash2,
-  Image as ImageIcon
+  Image as ImageIcon,
+  Sun,
+  Moon
 } from 'lucide-react';
 
 interface EditProfileModalProps {
@@ -42,7 +44,9 @@ export default function EditProfileModal({ isOpen, onClose }: EditProfileModalPr
     updateUsername, 
     updateUserPassword, 
     updateUserAvatar,
-    addUser 
+    addUser,
+    isDarkMode,
+    toggleDarkMode
   } = useAppStore();
 
   const currentUserObj = users.find(
@@ -391,6 +395,25 @@ export default function EditProfileModal({ isOpen, onClose }: EditProfileModalPr
                 </div>
               </div>
             </div>
+
+            {/* Dark / Light Mode Toggle Button in Profile Bar (Red Box Location) */}
+            <button
+              type="button"
+              onClick={toggleDarkMode}
+              className={`flex items-center justify-center w-10 h-10 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 ${
+                isDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700 shadow-md'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-sm'
+              }`}
+              title={isDarkMode ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด'}
+              aria-label={isDarkMode ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด'}
+            >
+              {isDarkMode ? (
+                <Sun size={20} className="text-amber-400 shrink-0" />
+              ) : (
+                <Moon size={20} className="text-slate-600 shrink-0" />
+              )}
+            </button>
           </div>
 
           {/* Presets Gallery Drawer */}
@@ -576,6 +599,25 @@ export default function EditProfileModal({ isOpen, onClose }: EditProfileModalPr
                 </div>
               </div>
             </div>
+
+            {/* Dark / Light Mode Toggle Button in Profile Bar (Red Box Location) */}
+            <button
+              type="button"
+              onClick={toggleDarkMode}
+              className={`flex items-center justify-center w-10 h-10 rounded-xl border transition-all cursor-pointer active:scale-95 shrink-0 ${
+                isDarkMode
+                  ? 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-slate-700 shadow-md'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-sm'
+              }`}
+              title={isDarkMode ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด'}
+              aria-label={isDarkMode ? 'สลับเป็นโหมดสว่าง' : 'สลับเป็นโหมดมืด'}
+            >
+              {isDarkMode ? (
+                <Sun size={20} className="text-amber-400 shrink-0" />
+              ) : (
+                <Moon size={20} className="text-slate-600 shrink-0" />
+              )}
+            </button>
           </div>
 
           {/* Modal Footer */}
