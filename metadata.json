@@ -1,0 +1,6 @@
+{
+  "name": "ระบบบริหารจัดการเครื่องมือแพทย์และงานซ่อมบำรุง",
+  "description": "ระบบบริหารจัดการครุภัณฑ์เครื่องมือแพทย์ แจ้งซ่อม สอบเทียบ บำรุงรักษา และยืม-คืน",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
