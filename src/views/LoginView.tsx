@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
 import { useAppStore } from '../store';
 import { Lock, User, Stethoscope, Building2, ChevronDown, Eye, EyeOff, Sun, Moon } from 'lucide-react';
-import { isProtectedSuperAdmin, validateUserLogin } from '../utils/accessControl';
+import { isProtectedSuperAdmin, isCentralFacility, validateUserLogin } from '../utils/accessControl';
 
 export default function LoginView() {
-  const { login, users, facilities, facilityConfigs, isDarkMode, toggleDarkMode } = useAppStore();
+  const { login, users, facilities, facilityConfigs, isDarkMode, toggleDarkMode, sessionClientId } = useAppStore();
   const [selectedFacility, setSelectedFacility] = useState('');
   const [hasManuallySelectedFacility, setHasManuallySelectedFacility] = useState(false);
   const [username, setUsername] = useState('');
@@ -16,11 +16,11 @@ export default function LoginView() {
     const set = new Set<string>();
     facilities.forEach((f) => {
       const trimmed = (f || '').trim();
-      if (trimmed && trimmed !== 'ส่วนกลาง (Super Admin)') set.add(trimmed);
+      if (trimmed && !isCentralFacility(trimmed)) set.add(trimmed);
     });
     users.forEach((u) => {
       const trimmed = (u.facility || '').trim();
-      if (trimmed && trimmed !== 'ส่วนกลาง (Super Admin)') set.add(trimmed);
+      if (trimmed && !isCentralFacility(trimmed)) set.add(trimmed);
     });
     return Array.from(set);
   }, [facilities, users]);
@@ -33,14 +33,14 @@ export default function LoginView() {
       const matchingUsers = users.filter((u) => u.username.trim().toLowerCase() === trimmed);
       const superAdminMatch = matchingUsers.find((u) => isProtectedSuperAdmin(u));
       if (superAdminMatch) {
-        setSelectedFacility('ส่วนกลาง (Super Admin)');
+        setSelectedFacility('ส่วนกลาง');
       } else if (matchingUsers.length === 1 && matchingUsers[0].facility) {
         setSelectedFacility(matchingUsers[0].facility);
       }
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
@@ -67,6 +67,29 @@ export default function LoginView() {
     if (!result.valid || !result.user) {
       setError(result.error || 'ไม่สามารถเข้าสู่ระบบได้');
       return;
+    }
+
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: result.user.id,
+          username: result.user.username,
+          facility: result.resolvedFacility || result.user.facility || '',
+          clientId: sessionClientId,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.allowed === false) {
+        setError(
+          data.error ||
+            'ไม่สามารถเข้าสู่ระบบซ้ำได้ เนื่องจากบัญชีนี้กำลังเข้าสู่ระบบใช้งานอยู่แล้ว'
+        );
+        return;
+      }
+    } catch {
+      // Allow fallback if offline
     }
 
     login(result.user.username, result.user.role, result.resolvedFacility);
@@ -186,7 +209,7 @@ export default function LoginView() {
                     {fac}
                   </option>
                 ))}
-                <option value="ส่วนกลาง (Super Admin)">ส่วนกลาง (Super Admin)</option>
+                <option value="ส่วนกลาง">ส่วนกลาง (Admin ส่วนกลาง)</option>
               </select>
               <div className="absolute inset-y-0 right-0 pr-4 flex items-center pointer-events-none">
                 <ChevronDown

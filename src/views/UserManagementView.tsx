@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import {
   isProtectedSuperAdmin,
+  isCentralFacility,
+  isCentralAdmin,
   getFacilityQuotaStats,
   getFacilityMaxRegularUsers,
   canDeleteUser,
@@ -54,10 +56,13 @@ export default function UserManagementView() {
     currentUser,
     userRole: currentUserRole,
     currentFacility,
+    activeSessions,
   } = useAppStore();
 
   const isViewerSuperAdmin = currentUserRole === 'Super Admin';
   const isViewerAdmin = currentUserRole === 'Admin';
+  const isViewerCentralAdmin = isViewerAdmin && isCentralFacility(currentFacility);
+  const isViewerGlobalAdmin = isViewerSuperAdmin || isViewerCentralAdmin;
 
   const currentUserObj = useMemo(() => {
     const normUser = (currentUser || '').trim().toLowerCase();
@@ -67,7 +72,9 @@ export default function UserManagementView() {
       const exactMatch = users.find(
         (u) =>
           u.username.trim().toLowerCase() === normUser &&
-          (isProtectedSuperAdmin(u) || (u.facility || '').trim().toLowerCase() === normFac)
+          (isProtectedSuperAdmin(u) ||
+            (isCentralFacility(normFac) && isCentralAdmin(u)) ||
+            (u.facility || '').trim().toLowerCase() === normFac)
       );
       if (exactMatch) return exactMatch;
     }
@@ -79,7 +86,7 @@ export default function UserManagementView() {
   const [newPassword, setNewPassword] = useState('');
   const [newRole, setNewRole] = useState<Role>('User');
   const [selectedFacility, setSelectedFacility] = useState<string>(
-    !isViewerSuperAdmin && currentFacility ? currentFacility : facilities[0] || 'โรงพยาบาลศูนย์การแพทย์'
+    !isViewerGlobalAdmin && currentFacility ? currentFacility : facilities[0] || 'โรงพยาบาลศูนย์การแพทย์'
   );
   const [isCreatingNewFacility, setIsCreatingNewFacility] = useState(false);
   const [customFacilityName, setCustomFacilityName] = useState('');
@@ -210,25 +217,30 @@ export default function UserManagementView() {
     triggerInlineSaved(fac);
   };
 
-  // Combine facilities from store and existing users
+  // Combine facilities from store and existing users (excluding central facilities)
   const allFacilities = useMemo(() => {
     const set = new Set<string>();
     (facilities || []).forEach((f) => {
-      if (f && f.trim() && f !== 'ส่วนกลาง (Super Admin)') set.add(f.trim());
+      if (f && f.trim() && !isCentralFacility(f)) set.add(f.trim());
     });
     users.forEach((u) => {
-      if (u.facility && u.facility.trim() && !isProtectedSuperAdmin(u)) {
+      if (u.facility && u.facility.trim() && !isProtectedSuperAdmin(u) && !isCentralFacility(u.facility)) {
         set.add(u.facility.trim());
       }
     });
     return Array.from(set);
   }, [facilities, users]);
 
-  // Visible users: Super Admin sees everyone; Facility Admin sees Super Admin + users in their facility
+  // Base users visible to viewer (Super Admin sees all; Central Admin & Facility Admin NEVER see Super Admin)
+  const viewerAccessibleUsers = useMemo(() => {
+    return isViewerSuperAdmin ? users : users.filter((u) => !isProtectedSuperAdmin(u));
+  }, [users, isViewerSuperAdmin]);
+
+  // Visible users: Super Admin sees everyone; Central Admin sees all except Super Admin; Facility Admin sees users in their facility
   const visibleUsers = useMemo(() => {
-    let list = users;
-    if (!isViewerSuperAdmin && currentFacility) {
-      list = users.filter(
+    let list = viewerAccessibleUsers;
+    if (!isViewerGlobalAdmin && currentFacility) {
+      list = list.filter(
         (u) =>
           (u.facility || '').trim().toLowerCase() === currentFacility.trim().toLowerCase()
       );
@@ -239,9 +251,9 @@ export default function UserManagementView() {
       );
     }
     return list;
-  }, [users, isViewerSuperAdmin, currentFacility, filterFacility]);
+  }, [viewerAccessibleUsers, isViewerGlobalAdmin, currentFacility, filterFacility]);
 
-  const activeTargetFacility = isViewerSuperAdmin
+  const activeTargetFacility = isViewerGlobalAdmin
     ? isCreatingNewFacility
       ? customFacilityName.trim()
       : selectedFacility
@@ -296,7 +308,7 @@ export default function UserManagementView() {
     e.preventDefault();
     setFeedbackError(null);
 
-    const targetFacility = isViewerSuperAdmin
+    const targetFacility = isViewerGlobalAdmin
       ? isCreatingNewFacility
         ? customFacilityName.trim()
         : selectedFacility.trim()
@@ -416,6 +428,23 @@ export default function UserManagementView() {
     }
   };
 
+  const getUserOnlineStatusIcon = (role: Role, isOnline: boolean) => {
+    const colorClass = isOnline ? 'text-emerald-500' : 'text-rose-500';
+    switch (role) {
+      case 'Super Admin':
+        return <ShieldAlert size={16} className={colorClass} />;
+      case 'Admin':
+        return <Shield size={16} className={colorClass} />;
+      case 'PM/CAL':
+        return <ClipboardCheck size={16} className={colorClass} />;
+      case 'Pool':
+        return <Layers size={16} className={colorClass} />;
+      case 'User':
+      default:
+        return <User size={16} className={colorClass} />;
+    }
+  };
+
   const getRoleBadge = (role: Role) => {
     switch (role) {
       case 'Super Admin':
@@ -495,7 +524,7 @@ export default function UserManagementView() {
 
       {/* Facility Quota Summary Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {(isViewerSuperAdmin ? allFacilities : [currentFacility || 'โรงพยาบาลศูนย์การแพทย์']).map((fac) => {
+        {(isViewerGlobalAdmin ? allFacilities : [currentFacility || 'โรงพยาบาลศูนย์การแพทย์']).map((fac) => {
           const facMaxRegular = getFacilityMaxRegularUsers(facilityConfigs, fac);
           const stats = getFacilityQuotaStats(users, fac, undefined, facMaxRegular);
           const isSelected = filterFacility === fac;
@@ -846,7 +875,7 @@ export default function UserManagementView() {
                 )}
               </div>
 
-              {!isViewerSuperAdmin ? (
+              {!isViewerGlobalAdmin ? (
                 <input
                   type="text"
                   disabled
@@ -975,7 +1004,7 @@ export default function UserManagementView() {
       )}
 
       {/* Filter Bar */}
-      {isViewerSuperAdmin && (
+      {isViewerGlobalAdmin && (
         <div className="flex items-center justify-between bg-white px-4 py-3 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center space-x-2 text-xs text-slate-600">
             <Building2 size={16} className="text-blue-600" />
@@ -985,7 +1014,7 @@ export default function UserManagementView() {
               onChange={(e) => setFilterFacility(e.target.value)}
               className="border border-slate-300 rounded-lg px-2.5 py-1 text-xs font-medium text-slate-800 bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="all">ทั้งหมด ({users.length} บัญชี)</option>
+              <option value="all">ทั้งหมด ({viewerAccessibleUsers.length} บัญชี)</option>
               {allFacilities.map((fac) => (
                 <option key={fac} value={fac}>
                   {fac}
@@ -1021,7 +1050,17 @@ export default function UserManagementView() {
             <tbody className="divide-y divide-slate-200 text-sm">
               {visibleUsers.map((user) => {
                 const isProtected = isProtectedSuperAdmin(user);
-                const isCurrentUser = user.username.toLowerCase() === currentUser?.toLowerCase();
+                const isCurrentUser = currentUserObj?.id
+                  ? user.id === currentUserObj.id
+                  : user.username.toLowerCase() === currentUser?.toLowerCase();
+                const activeSession = activeSessions.find(
+                  (s) =>
+                    (s.userId && s.userId === user.id) ||
+                    (isProtected && s.username.trim().toLowerCase() === 'phonmat') ||
+                    (s.username.trim().toLowerCase() === user.username.trim().toLowerCase() &&
+                      s.facility.trim().toLowerCase() === (user.facility || '').trim().toLowerCase())
+                );
+                const isUserOnline = isCurrentUser || Boolean(activeSession);
                 const deletable = canDeleteUser(user, currentUserObj);
 
                 return (
@@ -1029,17 +1068,19 @@ export default function UserManagementView() {
                     {/* Username */}
                     <td className="p-4">
                       <div className="flex items-center space-x-3">
-                        <div className="w-8 h-8 rounded-full bg-slate-100 border border-slate-200 overflow-hidden flex items-center justify-center text-slate-500 shrink-0">
-                          {user.avatar ? (
-                            <img
-                              src={user.avatar}
-                              alt={user.username}
-                              className="w-full h-full object-cover"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            getRoleIcon(user.role)
-                          )}
+                        <div
+                          className={`w-8 h-8 rounded-full border overflow-hidden flex items-center justify-center shrink-0 transition-colors ${
+                            isUserOnline
+                              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-500'
+                              : 'bg-rose-500/15 border-rose-500/40 text-rose-500'
+                          }`}
+                          title={
+                            isUserOnline
+                              ? `กำลังเข้าสู่ระบบใช้งานอยู่${activeSession?.ip ? ` (IP: ${activeSession.ip})` : ''}`
+                              : 'ไม่ได้เข้าสู่ระบบ (Offline)'
+                          }
+                        >
+                          {getUserOnlineStatusIcon(user.role, isUserOnline)}
                         </div>
                         {editingUserId === user.id ? (
                           <div className="flex flex-col space-y-1">
@@ -1091,6 +1132,11 @@ export default function UserManagementView() {
                         <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-red-700 bg-red-50 px-2.5 py-1 rounded-lg border border-red-200">
                           <Building2 size={13} />
                           <span>ทุกสถานประกอบการ (Super Admin)</span>
+                        </span>
+                      ) : isCentralAdmin(user) ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-indigo-700 bg-indigo-50 px-2.5 py-1 rounded-lg border border-indigo-200">
+                          <Building2 size={13} />
+                          <span>ส่วนกลาง (ทุกสถานประกอบการ)</span>
                         </span>
                       ) : isViewerSuperAdmin ? (
                         <select
@@ -1148,6 +1194,11 @@ export default function UserManagementView() {
                         <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-md border ${getRoleBadge(user.role)}`}>
                           {getRoleIcon(user.role)}
                           <span>Super Admin</span>
+                        </span>
+                      ) : isCentralAdmin(user) ? (
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-md border ${getRoleBadge(user.role)}`}>
+                          {getRoleIcon(user.role)}
+                          <span>Admin ส่วนกลาง</span>
                         </span>
                       ) : (
                         <select

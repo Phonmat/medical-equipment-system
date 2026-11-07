@@ -166,7 +166,7 @@ export default function EquipmentView() {
     model: '',
     serialNumber: '',
     department: '',
-    facility: currentFacility && currentFacility !== 'ส่วนกลาง (Super Admin)' ? currentFacility : (facilities[0] || 'โรงพยาบาลศูนย์การแพทย์'),
+    facility: currentFacility && currentFacility !== 'ส่วนกลาง (Super Admin)' && currentFacility !== 'ส่วนกลาง' ? currentFacility : (facilities[0] || 'โรงพยาบาลศูนย์การแพทย์'),
     ownerUsername: currentUser || '',
     itrisId: '',
     installationDate: '',
@@ -179,7 +179,7 @@ export default function EquipmentView() {
   });
 
   const isAdmin = !userRole || userRole === 'Super Admin' || userRole === 'Admin';
-  const isSuperAdmin = userRole === 'Super Admin';
+  const isSuperAdmin = userRole === 'Super Admin' || (userRole === 'Admin' && (currentFacility === 'ส่วนกลาง' || currentFacility === 'ส่วนกลาง (Super Admin)'));
   const facilityUsersForAssignment = useMemo(() => {
     const targetFac = isSuperAdmin ? formData.facility : (currentFacility || formData.facility);
     return users.filter(u => u.role !== 'Super Admin' && (!targetFac || (u.facility || '').trim().toLowerCase() === targetFac.trim().toLowerCase()));
@@ -446,54 +446,6 @@ export default function EquipmentView() {
           </p>
         </div>
         <div className="flex items-center flex-wrap gap-2.5">
-          {/* Refresh / Sync Button */}
-          <button
-            onClick={async () => {
-              setIsRefreshing(true);
-              await refreshData();
-              setTimeout(() => setIsRefreshing(false), 500);
-            }}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-sm font-medium transition-colors shadow-2xs cursor-pointer"
-            title="รีเฟรชดึงข้อมูลล่าสุดจากฐานข้อมูล Cloud SQL (Sync Data)"
-          >
-            <RotateCcw size={15} className={`text-slate-600 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
-            <span>{isRefreshing ? 'กำลังซิงค์...' : 'รีเฟรชข้อมูล'}</span>
-          </button>
-
-          {/* Print Register List Button */}
-          <button
-            onClick={() => setIsPrintListModalOpen(true)}
-            className="flex items-center space-x-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 border border-slate-200 rounded-lg text-sm font-medium transition-colors shadow-2xs cursor-pointer"
-            title="พิมพ์รายงานทะเบียนเครื่องมือแพทย์ / รายการสติกเกอร์ (Print Equipment Report)"
-          >
-            <Printer size={16} className="text-slate-600" />
-            <span>พิมพ์รายงาน</span>
-          </button>
-
-          {/* Clear All Equipment Button (Admin/Super Admin only when items exist) */}
-          {isAdmin && equipment.length > 0 && (
-            <button
-              onClick={() => setIsClearAllModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-sm font-medium transition-colors shadow-2xs cursor-pointer"
-              title="ลบข้อมูลทะเบียนเครื่องมือทั้งหมดออกจากระบบ"
-            >
-              <Trash2 size={15} className="text-rose-600" />
-              <span>ล้างทะเบียนทั้งหมด</span>
-            </button>
-          )}
-
-          {/* Import Excel Button */}
-          {isAdmin && (
-            <button
-              onClick={() => setIsImportModalOpen(true)}
-              className="flex items-center space-x-1.5 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-2xs cursor-pointer"
-              title="นำเข้าข้อมูลเครื่องมือแพทย์จากไฟล์ Excel (.xlsx / .xls)"
-            >
-              <FileSpreadsheet size={17} />
-              <span>นำเข้าข้อมูล</span>
-            </button>
-          )}
-
           {/* Add New Single Button */}
           {isAdmin && (
             <button

@@ -83,11 +83,197 @@ async function startServer() {
     }
   }
 
+  // Active User Sessions (1 User = 1 IP / 1 Active Session at a time)
+  interface ActiveUserSession {
+    userKey: string;
+    userId: string;
+    username: string;
+    facility: string;
+    ip: string;
+    clientId: string;
+    loginTime: number;
+    lastSeen: number;
+  }
+
+  const activeUserSessions = new Map<string, ActiveUserSession>();
+  const SESSION_TTL_MS = 45 * 1000; // 45s heartbeat timeout
+
+  function getClientIp(req: express.Request): string {
+    const forwarded = req.headers['x-forwarded-for'];
+    let rawIp = '';
+    if (typeof forwarded === 'string' && forwarded.trim()) {
+      rawIp = forwarded.split(',')[0].trim();
+    } else if (Array.isArray(forwarded) && forwarded.length > 0) {
+      rawIp = forwarded[0].trim();
+    } else {
+      rawIp = req.socket?.remoteAddress || req.ip || 'unknown';
+    }
+    if (rawIp === '::1' || rawIp === '::ffff:127.0.0.1') {
+      return '127.0.0.1';
+    }
+    if (rawIp.startsWith('::ffff:')) {
+      return rawIp.slice(7);
+    }
+    return rawIp;
+  }
+
+  function buildUserSessionKey(userId?: string, username?: string, facility?: string): string {
+    const normUser = (username || '').trim().toLowerCase();
+    if (normUser === 'phonmat') return 'superadmin::phonmat';
+    if (userId && userId.trim()) return `id::${userId.trim()}`;
+    const normFac = (facility || '').trim().toLowerCase();
+    return `user::${normUser}::${normFac}`;
+  }
+
+  function findExistingSession(userId?: string, username?: string, facility?: string): ActiveUserSession | undefined {
+    const normUser = (username || '').trim().toLowerCase();
+    const normFac = (facility || '').trim().toLowerCase();
+    for (const session of activeUserSessions.values()) {
+      if (userId && session.userId && session.userId === userId) {
+        return session;
+      }
+      if (normUser === 'phonmat' && session.username.trim().toLowerCase() === 'phonmat') {
+        return session;
+      }
+      if (
+        normUser &&
+        session.username.trim().toLowerCase() === normUser &&
+        session.facility.trim().toLowerCase() === normFac
+      ) {
+        return session;
+      }
+    }
+    return undefined;
+  }
+
+  function pruneExpiredSessions(): boolean {
+    const now = Date.now();
+    let removed = false;
+    for (const [key, session] of activeUserSessions.entries()) {
+      if (now - session.lastSeen > SESSION_TTL_MS) {
+        activeUserSessions.delete(key);
+        removed = true;
+      }
+    }
+    return removed;
+  }
+
+  function getActiveSessionsList(): ActiveUserSession[] {
+    pruneExpiredSessions();
+    return Array.from(activeUserSessions.values());
+  }
+
+  app.get('/api/auth/sessions', (req, res) => {
+    res.json({ activeSessions: getActiveSessionsList() });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    pruneExpiredSessions();
+    const { userId, username, facility, clientId } = req.body || {};
+    if (!username) {
+      return res.status(400).json({ allowed: false, error: 'กรุณาระบุชื่อผู้ใช้งาน' });
+    }
+
+    const clientIp = getClientIp(req);
+    const existing = findExistingSession(userId, username, facility);
+
+    if (existing) {
+      const isSameSession =
+        existing.ip === clientIp &&
+        existing.clientId &&
+        clientId &&
+        existing.clientId === clientId;
+
+      if (!isSameSession) {
+        return res.status(409).json({
+          allowed: false,
+          error: `บัญชี "${username}" กำลังเข้าสู่ระบบใช้งานอยู่แล้ว (IP: ${existing.ip}) ไม่สามารถ Login ซ้ำในเวลาเดียวกันได้`,
+        });
+      }
+    }
+
+    const userKey = existing?.userKey || buildUserSessionKey(userId, username, facility);
+    const now = Date.now();
+    const session: ActiveUserSession = {
+      userKey,
+      userId: String(userId || ''),
+      username: String(username).trim(),
+      facility: String(facility || '').trim(),
+      ip: clientIp,
+      clientId: String(clientId || ''),
+      loginTime: existing?.loginTime || now,
+      lastSeen: now,
+    };
+
+    activeUserSessions.set(userKey, session);
+    broadcastChange('sessions');
+    res.json({ allowed: true, session, activeSessions: getActiveSessionsList() });
+  });
+
+  app.post('/api/auth/heartbeat', (req, res) => {
+    const expiredRemoved = pruneExpiredSessions();
+    const { userId, username, facility, clientId } = req.body || {};
+    if (!username) {
+      return res.status(400).json({ valid: false });
+    }
+
+    const clientIp = getClientIp(req);
+    const existing = findExistingSession(userId, username, facility);
+    const now = Date.now();
+
+    if (existing) {
+      // Check if another IP or another client owns the session
+      if (existing.ip !== clientIp || (existing.clientId && clientId && existing.clientId !== clientId)) {
+        return res.status(409).json({
+          valid: false,
+          error: 'บัญชีนี้ถูกใช้งานอยู่บนเครื่องหรือ IP อื่น',
+          activeSessions: getActiveSessionsList(),
+        });
+      }
+      existing.lastSeen = now;
+      if (userId && !existing.userId) existing.userId = String(userId);
+      activeUserSessions.set(existing.userKey, existing);
+      if (expiredRemoved) broadcastChange('sessions');
+      return res.json({ valid: true, activeSessions: getActiveSessionsList() });
+    }
+
+    // Register session if none exists yet (e.g., server restarted while user tab remained open)
+    const userKey = buildUserSessionKey(userId, username, facility);
+    const session: ActiveUserSession = {
+      userKey,
+      userId: String(userId || ''),
+      username: String(username).trim(),
+      facility: String(facility || '').trim(),
+      ip: clientIp,
+      clientId: String(clientId || ''),
+      loginTime: now,
+      lastSeen: now,
+    };
+    activeUserSessions.set(userKey, session);
+    broadcastChange('sessions');
+    return res.json({ valid: true, activeSessions: getActiveSessionsList() });
+  });
+
+  app.post('/api/auth/logout', (req, res) => {
+    const { userId, username, facility, clientId } = req.body || {};
+    const existing = findExistingSession(userId, username, facility);
+    if (existing) {
+      if (!clientId || !existing.clientId || existing.clientId === clientId) {
+        activeUserSessions.delete(existing.userKey);
+        broadcastChange('sessions');
+      }
+    }
+    res.json({ ok: true, activeSessions: getActiveSessionsList() });
+  });
+
   // Cloud SQL Data Endpoints
   app.get('/api/data', async (req, res) => {
     try {
       const data = await getAllData();
-      res.json(data);
+      res.json({
+        ...data,
+        activeSessions: getActiveSessionsList(),
+      });
     } catch (error: any) {
       console.error('Failed to get data:', error);
       res.status(500).json({ error: error.message || 'Failed to fetch data' });

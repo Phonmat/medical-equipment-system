@@ -190,6 +190,24 @@ export function parseDateString(str?: string): string {
     return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
   }
 
+  // YYYY-MM or YYYY/MM
+  const ymMatch = trimmed.match(/^(\d{4})[\/\-](\d{1,2})$/);
+  if (ymMatch) {
+    let y = Number(ymMatch[1]);
+    let m = Number(ymMatch[2]);
+    if (y > 2400) y -= 543;
+    return `${y}-${String(m).padStart(2, '0')}`;
+  }
+
+  // MM/YYYY or M/YYYY
+  const myMatch = trimmed.match(/^(\d{1,2})[\/\.](\d{4})$/);
+  if (myMatch) {
+    let m = Number(myMatch[1]);
+    let y = Number(myMatch[2]);
+    if (y > 2400) y -= 543;
+    return `${y}-${String(m).padStart(2, '0')}`;
+  }
+
   return trimmed;
 }
 
@@ -204,6 +222,10 @@ export function formatDateSlash(dateStr?: string): string {
   if (parsed && /^\d{4}-\d{2}-\d{2}$/.test(parsed)) {
     const [y, m, d] = parsed.split('-');
     return `${d}/${m}/${y}`;
+  }
+  if (parsed && /^\d{4}-\d{2}$/.test(parsed)) {
+    const [y, m] = parsed.split('-');
+    return `${m}/${y}`;
   }
 
   return trimmed.replace(/-/g, '/');
@@ -438,10 +460,12 @@ export function resolvePlanStatusByNextDate(
   nextDateStr?: string,
   fallbackStatus: 'pending' | 'completed' | 'overdue' = 'pending'
 ): 'pending' | 'completed' | 'overdue' {
+  if (fallbackStatus === 'completed') return 'completed';
   const parsedNext = parseDateString(nextDateStr);
-  if (parsedNext && /^\d{4}-\d{2}-\d{2}$/.test(parsedNext)) {
+  if (parsedNext) {
     const today = getTodayIsoLocalString();
-    return today > parsedNext ? 'overdue' : 'completed';
+    const nextComp = parsedNext.length === 7 ? `${parsedNext}-31` : parsedNext;
+    return today > nextComp ? 'overdue' : 'pending';
   }
   return fallbackStatus;
 }

@@ -230,7 +230,7 @@ export default function ImportCalibrationModal({ isOpen, onClose, onImport }: Im
           frequency,
           lastDate,
           nextDate,
-          agency: rawAgency || 'ศูนย์เครื่องมือแพทย์ / สถาบันมาตรวิทยา',
+          agency: rawAgency || 'ITRIS PM Team',
           certNumber: rawCert || '',
           status,
           isValid,

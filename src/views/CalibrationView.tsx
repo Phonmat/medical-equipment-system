@@ -10,7 +10,7 @@ import ImportCalibrationModal from '../components/ImportCalibrationModal';
 const THAI_MONTHS_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 
 export default function CalibrationView() {
-  const { equipment, calibrations, addCalibration, bulkAddCalibration, updateCalibration, deleteCalibration, userRole, currentFacility } = useAppStore();
+  const { equipment, calibrations, addCalibration, bulkAddCalibration, updateCalibration, deleteCalibration, updateEquipment, userRole, currentFacility } = useAppStore();
   const isAdmin = userRole === 'Super Admin' || userRole === 'Admin';
   const canEdit = isAdmin || userRole === 'PM/CAL';
   const [isAdding, setIsAdding] = useState(false);
@@ -65,7 +65,7 @@ export default function CalibrationView() {
     frequency: 'ทุก 1 ปี',
     lastDate: new Date().toISOString().split('T')[0],
     nextDate: '',
-    agency: '',
+    agency: 'ITRIS PM Team',
     certNumber: '',
     status: 'pending' as PlanStatus
   });
@@ -78,6 +78,15 @@ export default function CalibrationView() {
     agency: '',
     certNumber: '',
     status: 'pending' as PlanStatus
+  });
+
+  const [editEqData, setEditEqData] = useState({
+    name: '',
+    itrisId: '',
+    manufacturer: '',
+    model: '',
+    serialNumber: '',
+    riskLevel: 'Low' as Equipment['riskLevel']
   });
 
   const handleImportHighRisk = () => {
@@ -94,7 +103,7 @@ export default function CalibrationView() {
         frequency: 'ทุก 1 ปี',
         lastDate: new Date().toISOString().split('T')[0],
         nextDate: '',
-        agency: '',
+        agency: 'ITRIS PM Team',
         certNumber: '',
         status: 'pending' as PlanStatus
       }));
@@ -114,7 +123,7 @@ export default function CalibrationView() {
       frequency: 'ทุก 1 ปี',
       lastDate: new Date().toISOString().split('T')[0],
       nextDate: '',
-      agency: '',
+      agency: 'ITRIS PM Team',
       certNumber: '',
       status: 'pending'
     });
@@ -125,6 +134,15 @@ export default function CalibrationView() {
 
   const handleStartEdit = (plan: CalibrationPlan) => {
     setEditingPlan(plan);
+    const eq = equipmentMap.get(plan.equipmentId) || equipment.find(e => e.id === plan.equipmentId);
+    setEditEqData({
+      name: eq?.name || '',
+      itrisId: eq?.itrisId || '',
+      manufacturer: eq?.manufacturer || '',
+      model: eq?.model || '',
+      serialNumber: eq?.serialNumber || '',
+      riskLevel: eq?.riskLevel || 'Low'
+    });
     setEditFormData({
       equipmentId: plan.equipmentId,
       frequency: plan.frequency,
@@ -141,6 +159,9 @@ export default function CalibrationView() {
     if (!editingPlan) return;
     const resolvedStatus = resolvePlanStatusByNextDate(editFormData.nextDate, editFormData.status);
     updateCalibration(editingPlan.id, { ...editFormData, status: resolvedStatus });
+    if (editingPlan.equipmentId) {
+      updateEquipment(editingPlan.equipmentId, editEqData);
+    }
     setEditingPlan(null);
     setSuccessMessage('บันทึกการแก้ไขเรียบร้อยแล้ว');
     setTimeout(() => setSuccessMessage(null), 3000);
@@ -233,7 +254,7 @@ export default function CalibrationView() {
         'รหัสเครื่องมือ': eqCode,
         'ชื่อเครื่องมือ': eq?.name || 'เครื่องมือแพทย์',
         'แผนก': eq?.department || '-',
-        'ผู้ผลิต (Brand)': eq?.brand || '-',
+        'ผู้ผลิต (Brand)': eq?.manufacturer || '-',
         'รุ่น (Model)': eq?.model || '-',
         'หมายเลขเครื่อง (Serial Number)': eq?.serialNumber || '-',
         'ระดับความเสี่ยง': eq?.riskLevel || '-',
@@ -294,7 +315,7 @@ export default function CalibrationView() {
           'รหัสเครื่องมือ': eqCode,
           'ชื่อเครื่องมือ': eq?.name || 'เครื่องมือแพทย์',
           'แผนก': eq?.department || '-',
-          'ผู้ผลิต (Brand)': eq?.brand || eq?.manufacturer || '-',
+          'ผู้ผลิต (Brand)': eq?.manufacturer || '-',
           'รุ่น (Model)': eq?.model || '-',
           'หมายเลขเครื่อง (S/N)': eq?.serialNumber || '-',
           'ระดับความเสี่ยง': eq?.riskLevel || '-',
@@ -336,22 +357,35 @@ export default function CalibrationView() {
         const row: Record<string, any> = {
           'ลำดับ': idx + 1,
           'รหัสเครื่องมือ': eqCode,
+          'Itris ID': eq?.itrisId || '-',
           'ชื่อเครื่องมือ': eq?.name || 'เครื่องมือแพทย์',
           'แผนก': eq?.department || '-',
-          'ความเสี่ยง': eq?.riskLevel || '-',
+          'Manufacturer': eq?.manufacturer || '-',
+          'Model': eq?.model || '-',
+          'Serial number': eq?.serialNumber || '-',
+          'Risk Levels': (eq?.riskLevel || 'Low').toUpperCase(),
           'รอบการสอบเทียบ': c.frequency || '-',
           'สอบเทียบล่าสุด': formatDateSlash(c.lastDate),
           'กำหนดครั้งถัดไป': formatDateSlash(c.nextDate),
         };
 
-        const nextDateStr = c.nextDate || '';
-        const calYear = nextDateStr ? parseInt(nextDateStr.substring(0, 4), 10) : null;
-        const calMonth = (calYear === annualPlanYear && nextDateStr) ? parseInt(nextDateStr.substring(5, 7), 10) : null;
-        const effectiveStatus = resolvePlanStatusByNextDate(c.nextDate, c.status);
+        const parsedLast = parseDateString(c.lastDate);
+        const lastYear = parsedLast ? parseInt(parsedLast.substring(0, 4), 10) : null;
+        const lastMonth = (lastYear === annualPlanYear && parsedLast) ? parseInt(parsedLast.substring(5, 7), 10) : null;
+
+        const parsedNext = parseDateString(c.nextDate);
+        const nextYear = parsedNext ? parseInt(parsedNext.substring(0, 4), 10) : null;
+        const nextMonth = (nextYear === annualPlanYear && parsedNext) ? parseInt(parsedNext.substring(5, 7), 10) : null;
 
         THAI_MONTHS_SHORT.forEach((mName, mIdx) => {
-          if (calMonth === mIdx + 1) {
-            row[mName] = effectiveStatus === 'completed' ? 'สอบเทียบแล้ว' : (effectiveStatus === 'overdue' ? 'เลยกำหนด' : 'แผน');
+          const currentMonthNum = mIdx + 1;
+          const isCalibratedThisMonth = lastMonth === currentMonthNum;
+          const isPendingThisMonth = !isCalibratedThisMonth && nextMonth === currentMonthNum;
+
+          if (isCalibratedThisMonth) {
+            row[mName] = 'สอบเทียบแล้ว';
+          } else if (isPendingThisMonth) {
+            row[mName] = 'ยังไม่ได้ทำการสอบเทียบ';
           } else {
             row[mName] = '';
           }
@@ -602,11 +636,11 @@ export default function CalibrationView() {
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">กำหนดครั้งถัดไป</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">กำหนดสอบเทียบครั้งถัดไป (เดือน/ปี)</label>
               <input
-                type="date"
+                type="month"
                 required
-                value={formData.nextDate}
+                value={(parseDateString(formData.nextDate) || formData.nextDate || '').substring(0, 7)}
                 onChange={e => {
                   const nextVal = e.target.value;
                   setFormData(prev => ({
@@ -615,7 +649,7 @@ export default function CalibrationView() {
                     status: resolvePlanStatusByNextDate(nextVal, prev.status),
                   }));
                 }}
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 bg-white"
               />
             </div>
             <div>
@@ -663,13 +697,13 @@ export default function CalibrationView() {
           <table className="w-full text-left border-separate border-spacing-0 text-sm">
             <thead className="bg-slate-50 sticky top-0 z-10 shadow-xs">
               <tr className="border-b border-slate-200 text-slate-600">
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">รหัสเครื่องมือ</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">ชื่อเครื่องมือ</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">หน่วยงานสอบเทียบ / เลขใบรับรอง</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">รอบการสอบเทียบ</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">ล่าสุด / ครั้งถัดไป</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">รหัสเครื่องมือ</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">ชื่อเครื่องมือ</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">หน่วยงานสอบเทียบ / เลขใบรับรอง</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">รอบการสอบเทียบ</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">ล่าสุด / ครั้งถัดไป</th>
                 <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap min-w-[120px]">สถานะ</th>
-                <th className="px-6 py-4 font-medium text-right bg-slate-50 border-b border-slate-200 sticky right-0 top-0 z-20">จัดการ</th>
+                <th className="px-6 py-4 font-medium text-right bg-slate-50 border-b border-slate-200 sticky right-0 top-0 z-20 whitespace-nowrap">จัดการ</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -677,19 +711,19 @@ export default function CalibrationView() {
                 const eq = equipmentMap.get(c.equipmentId) || equipment.find(e => e.id === c.equipmentId);
                 return (
                   <tr key={c.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 font-mono font-semibold text-slate-900">
+                    <td className="px-6 py-4 font-mono font-semibold text-slate-900 whitespace-nowrap">
                       {eq?.code || (c.equipmentId.startsWith('auto-cal-') ? c.equipmentId.replace('auto-cal-', '') : 'Unknown')}
                     </td>
-                    <td className="px-6 py-4 text-slate-800 font-medium">
+                    <td className="px-6 py-4 text-slate-800 font-medium whitespace-nowrap">
                       <div>{eq?.name || 'เครื่องมือแพทย์'}</div>
                       <div className="text-xs text-slate-400">{eq?.department || '-'}</div>
                     </td>
-                    <td className="px-6 py-4 text-slate-700 text-xs">
+                    <td className="px-6 py-4 text-slate-700 text-xs whitespace-nowrap">
                       <div>{c.agency || 'ไม่ระบุหน่วยงาน'}</div>
                       {c.certNumber && <div className="font-mono text-blue-600 font-semibold">Cert: {c.certNumber}</div>}
                     </td>
-                    <td className="px-6 py-4 text-slate-700">{c.frequency}</td>
-                    <td className="px-6 py-4 text-xs font-mono">
+                    <td className="px-6 py-4 text-slate-700 whitespace-nowrap">{c.frequency}</td>
+                    <td className="px-6 py-4 text-xs font-mono whitespace-nowrap">
                       <div className="text-slate-600">ล่าสุด: {formatDateSlash(c.lastDate)}</div>
                       <div className="text-blue-600 font-semibold">ถัดไป: {formatDateSlash(c.nextDate)}</div>
                     </td>
@@ -847,108 +881,189 @@ export default function CalibrationView() {
       )}
 
       {/* Edit Modal */}
-      {editingPlan && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
-          <div className="bg-white rounded-2xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-4 bg-slate-50 border-b border-slate-200">
-              <h3 className="font-bold text-slate-900 text-base">แก้ไขแผนการสอบเทียบ (Calibration)</h3>
-              <button onClick={() => setEditingPlan(null)} className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer">
-                <X size={18} />
-              </button>
+      {editingPlan && (() => {
+        const eq = equipmentMap.get(editingPlan.equipmentId) || equipment.find(e => e.id === editingPlan.equipmentId);
+        const eqCode = eq?.code || (editingPlan.equipmentId.startsWith('auto-cal-') ? editingPlan.equipmentId.replace('auto-cal-', '') : editingPlan.equipmentId);
+        return (
+          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[70] animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl max-w-xl w-full shadow-2xl border border-slate-200 overflow-hidden max-h-[92vh] flex flex-col">
+              <div className="flex items-center justify-between px-5 py-4 bg-slate-50 border-b border-slate-200 shrink-0">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">แก้ไขข้อมูลแผนการสอบเทียบ</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">รหัสเครื่อง: <span className="font-mono font-bold text-blue-700">{eqCode}</span> • {editEqData.name || 'เครื่องมือแพทย์'}</p>
+                </div>
+                <button onClick={() => setEditingPlan(null)} className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEdit} className="p-5 space-y-4 text-sm overflow-y-auto flex-1">
+                {/* Equipment Information Section */}
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                  <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span>ข้อมูลเครื่องมือแพทย์</span>
+                    <span className="text-[11px] font-normal text-slate-500">อัปเดตข้อมูลเครื่องมือ</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">ชื่อเครื่องมือ</label>
+                      <input
+                        type="text"
+                        value={editEqData.name}
+                        onChange={e => setEditEqData({ ...editEqData, name: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Itris ID</label>
+                      <input
+                        type="text"
+                        value={editEqData.itrisId}
+                        onChange={e => setEditEqData({ ...editEqData, itrisId: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Manufacturer (ผู้ผลิต)</label>
+                      <input
+                        type="text"
+                        value={editEqData.manufacturer}
+                        onChange={e => setEditEqData({ ...editEqData, manufacturer: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Model (รุ่น)</label>
+                      <input
+                        type="text"
+                        value={editEqData.model}
+                        onChange={e => setEditEqData({ ...editEqData, model: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Serial number (หมายเลขเครื่อง)</label>
+                      <input
+                        type="text"
+                        value={editEqData.serialNumber}
+                        onChange={e => setEditEqData({ ...editEqData, serialNumber: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-mono focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Risk Levels (ความเสี่ยง)</label>
+                      <select
+                        value={editEqData.riskLevel}
+                        onChange={e => setEditEqData({ ...editEqData, riskLevel: e.target.value as any })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="High">HIGH (ความเสี่ยงสูง)</option>
+                        <option value="Medium">MEDIUM (ความเสี่ยงปานกลาง)</option>
+                        <option value="Low">LOW (ความเสี่ยงต่ำ)</option>
+                      </select>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Calibration Plan Section */}
+                <div className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 space-y-3">
+                  <div className="text-xs font-bold text-slate-700">ข้อมูลแผนการสอบเทียบ</div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">รอบการสอบเทียบ</label>
+                      <select
+                        value={editFormData.frequency}
+                        onChange={e => setEditFormData({ ...editFormData, frequency: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="ทุก 6 เดือน">ทุก 6 เดือน</option>
+                        <option value="ทุก 1 ปี">ทุก 1 ปี</option>
+                        <option value="ทุก 2 ปี">ทุก 2 ปี</option>
+                        <option value="ตามแผนกำหนด">ตามแผนกำหนด</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">สถานะ</label>
+                      <select
+                        value={editFormData.status}
+                        onChange={e => setEditFormData({ ...editFormData, status: e.target.value as PlanStatus })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      >
+                        <option value="pending">รอดำเนินการ</option>
+                        <option value="completed">สอบเทียบแล้ว</option>
+                        <option value="overdue">เลยกำหนด</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">วันที่สอบเทียบล่าสุด</label>
+                      <input
+                        type="date"
+                        required
+                        value={editFormData.lastDate}
+                        onChange={e => setEditFormData({ ...editFormData, lastDate: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">กำหนดสอบเทียบครั้งถัดไป (เดือน/ปี)</label>
+                      <input
+                        type="month"
+                        required
+                        value={(parseDateString(editFormData.nextDate) || editFormData.nextDate || '').substring(0, 7)}
+                        onChange={e => {
+                          const nextVal = e.target.value;
+                          setEditFormData(prev => ({
+                            ...prev,
+                            nextDate: nextVal,
+                            status: resolvePlanStatusByNextDate(nextVal, prev.status),
+                          }));
+                        }}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">หน่วยงานสอบเทียบ</label>
+                      <input
+                        type="text"
+                        value={editFormData.agency}
+                        onChange={e => setEditFormData({ ...editFormData, agency: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
+                        placeholder="เช่น ITRIS PM Team..."
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">เลขที่ใบรับรอง (Cert No.)</label>
+                      <input
+                        type="text"
+                        value={editFormData.certNumber}
+                        onChange={e => setEditFormData({ ...editFormData, certNumber: e.target.value })}
+                        className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500 font-mono bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setEditingPlan(null)}
+                    className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center space-x-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 cursor-pointer shadow-xs"
+                  >
+                    <Check size={15} />
+                    <span>บันทึกการแก้ไข</span>
+                  </button>
+                </div>
+              </form>
             </div>
-            <form onSubmit={handleSaveEdit} className="p-5 space-y-3 text-sm">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">รอบการสอบเทียบ</label>
-                <select
-                  value={editFormData.frequency}
-                  onChange={e => setEditFormData({ ...editFormData, frequency: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  <option value="ทุก 6 เดือน">ทุก 6 เดือน</option>
-                  <option value="ทุก 1 ปี">ทุก 1 ปี</option>
-                  <option value="ทุก 2 ปี">ทุก 2 ปี</option>
-                  <option value="ตามแผนกำหนด">ตามแผนกำหนด</option>
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">วันที่ล่าสุด</label>
-                  <input
-                    type="date"
-                    required
-                    value={editFormData.lastDate}
-                    onChange={e => setEditFormData({ ...editFormData, lastDate: e.target.value })}
-                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">วันที่ครั้งถัดไป</label>
-                  <input
-                    type="date"
-                    required
-                    value={editFormData.nextDate}
-                    onChange={e => {
-                      const nextVal = e.target.value;
-                      setEditFormData(prev => ({
-                        ...prev,
-                        nextDate: nextVal,
-                        status: resolvePlanStatusByNextDate(nextVal, prev.status),
-                      }));
-                    }}
-                    className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs focus:ring-2 focus:ring-blue-500"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">สถานะ</label>
-                <select
-                  value={editFormData.status}
-                  onChange={e => setEditFormData({ ...editFormData, status: e.target.value as PlanStatus })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 bg-white"
-                >
-                  <option value="pending">รอดำเนินการ</option>
-                  <option value="completed">สอบเทียบแล้ว</option>
-                  <option value="overdue">เลยกำหนด</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">หน่วยงานสอบเทียบ</label>
-                <input
-                  type="text"
-                  value={editFormData.agency}
-                  onChange={e => setEditFormData({ ...editFormData, agency: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">เลขที่ใบรับรอง (Cert No.)</label>
-                <input
-                  type="text"
-                  value={editFormData.certNumber}
-                  onChange={e => setEditFormData({ ...editFormData, certNumber: e.target.value })}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs focus:ring-2 focus:ring-blue-500 font-mono"
-                />
-              </div>
-              <div className="flex justify-end space-x-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setEditingPlan(null)}
-                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 cursor-pointer"
-                >
-                  ยกเลิก
-                </button>
-                <button
-                  type="submit"
-                  className="inline-flex items-center space-x-1 px-4 py-2 bg-blue-600 text-white rounded-lg text-xs font-semibold hover:bg-blue-700 cursor-pointer"
-                >
-                  <Check size={15} />
-                  <span>บันทึกการแก้ไข</span>
-                </button>
-              </div>
-            </form>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Delete Confirmation Modal */}
       {planToDelete && (
@@ -1041,7 +1156,7 @@ export default function CalibrationView() {
                   <div className="border-b-2 border-slate-800 pb-4 mb-6 flex items-start justify-between">
                     <div>
                       <h1 className="text-xl font-bold text-slate-900">ใบรายงานแผนการสอบเทียบเครื่องมือแพทย์ (Calibration Report)</h1>
-                      <p className="text-sm text-slate-600 mt-1">สถานพยาบาล: {currentFacility?.name || 'โรงพยาบาล / สถานพยาบาล'}</p>
+                      <p className="text-sm text-slate-600 mt-1">สถานพยาบาล: {currentFacility || 'โรงพยาบาล / สถานพยาบาล'}</p>
                     </div>
                     <div className="text-right text-xs text-slate-500">
                       <div className="font-semibold text-slate-800">เอกสารระบบบริหารจัดการเครื่องมือแพทย์</div>
@@ -1072,7 +1187,7 @@ export default function CalibrationView() {
                       </div>
                       <div className="p-2.5 border border-slate-200 rounded-lg">
                         <div className="text-xs text-slate-500">ยี่ห้อ / รุ่น (Brand / Model)</div>
-                        <div className="font-semibold text-slate-800 mt-0.5">{[printEq?.brand, printEq?.model].filter(Boolean).join(' / ') || '-'}</div>
+                        <div className="font-semibold text-slate-800 mt-0.5">{[printEq?.manufacturer, printEq?.model].filter(Boolean).join(' / ') || '-'}</div>
                       </div>
                       <div className="p-2.5 border border-slate-200 rounded-lg">
                         <div className="text-xs text-slate-500">หมายเลขเครื่อง (Serial Number)</div>
@@ -1275,24 +1390,29 @@ export default function CalibrationView() {
                   <table className="w-full text-left border-collapse border border-slate-300 text-[11px]">
                     <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
                       <tr>
-                        <th className="p-1.5 border-r border-slate-300 text-center w-10">#</th>
-                        <th className="p-1.5 border-r border-slate-300 w-24">รหัสเครื่อง</th>
-                        <th className="p-1.5 border-r border-slate-300 min-w-[140px]">ชื่อเครื่องมือ</th>
-                        <th className="p-1.5 border-r border-slate-300 w-28">แผนก</th>
-                        <th className="p-1.5 border-r border-slate-300 text-center w-16">ความเสี่ยง</th>
-                        <th className="p-1.5 border-r border-slate-300 text-center w-20">รอบสอบเทียบ</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center w-10 whitespace-nowrap">#</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">รหัสเครื่อง</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center whitespace-nowrap">Itris ID</th>
+                        <th className="p-1.5 border-r border-slate-300 min-w-[140px] whitespace-nowrap">ชื่อเครื่องมือ</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">แผนก</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">Manufacturer</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">Model</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">Serial number</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center whitespace-nowrap">Risk Levels</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center whitespace-nowrap">รอบสอบเทียบ</th>
                         {THAI_MONTHS_SHORT.map((m, idx) => (
-                          <th key={idx} className="p-1.5 border-r border-slate-300 text-center w-12 text-[10px]">
+                          <th key={idx} className="p-1.5 border-r border-slate-300 text-center w-10 text-[10px] whitespace-nowrap">
                             {m}
                           </th>
                         ))}
-                        <th className="p-1.5 min-w-[100px]">หน่วยงานสอบเทียบ</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">หน่วยงานสอบเทียบ</th>
+                        <th className="p-1.5 text-center whitespace-nowrap print:hidden">จัดการ</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
                       {annualPlanCalibrations.length === 0 ? (
                         <tr>
-                          <td colSpan={19} className="p-8 text-center text-slate-400">
+                          <td colSpan={24} className="p-8 text-center text-slate-400">
                             ไม่พบรายการแผนการสอบเทียบในแผนกที่เลือก
                           </td>
                         </tr>
@@ -1300,44 +1420,57 @@ export default function CalibrationView() {
                         annualPlanCalibrations.map((c, idx) => {
                           const eq = equipmentMap.get(c.equipmentId) || equipment.find(e => e.id === c.equipmentId);
                           const eqCode = eq?.code || (c.equipmentId.startsWith('auto-cal-') ? c.equipmentId.replace('auto-cal-', '') : c.equipmentId);
-                          const effectiveStatus = resolvePlanStatusByNextDate(c.nextDate, c.status);
 
-                          const nextDateStr = c.nextDate || '';
-                          const calYear = nextDateStr ? parseInt(nextDateStr.substring(0, 4), 10) : null;
-                          const calMonth = (calYear === annualPlanYear && nextDateStr) ? parseInt(nextDateStr.substring(5, 7), 10) : null;
+                          // ตรวจสอบเดือนและปีที่สอบเทียบแล้ว (lastDate - กรอบแดงที่ 1)
+                          const parsedLast = parseDateString(c.lastDate);
+                          const lastYear = parsedLast ? parseInt(parsedLast.substring(0, 4), 10) : null;
+                          const lastMonth = (lastYear === annualPlanYear && parsedLast) ? parseInt(parsedLast.substring(5, 7), 10) : null;
+
+                          // ตรวจสอบเดือนและปีที่กำหนดสอบเทียบครั้งถัดไป (nextDate - กรอบแดงที่ 2)
+                          const parsedNext = parseDateString(c.nextDate);
+                          const nextYear = parsedNext ? parseInt(parsedNext.substring(0, 4), 10) : null;
+                          const nextMonth = (nextYear === annualPlanYear && parsedNext) ? parseInt(parsedNext.substring(5, 7), 10) : null;
 
                           return (
                             <tr key={c.id} className="hover:bg-slate-50 transition-colors">
-                              <td className="p-1.5 text-center font-mono border-r border-slate-200 text-slate-500">{idx + 1}</td>
-                              <td className="p-1.5 font-mono font-bold text-slate-900 border-r border-slate-200">{eqCode}</td>
-                              <td className="p-1.5 font-medium text-slate-800 border-r border-slate-200">{eq?.name || 'เครื่องมือแพทย์'}</td>
-                              <td className="p-1.5 text-slate-600 border-r border-slate-200 truncate max-w-[110px]">{eq?.department || '-'}</td>
-                              <td className="p-1.5 text-center border-r border-slate-200">
-                                <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-semibold ${
+                              <td className="px-2 py-1.5 text-center font-mono border-r border-slate-200 text-slate-500 whitespace-nowrap">{idx + 1}</td>
+                              <td className="px-2.5 py-1.5 font-mono font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">{eqCode}</td>
+                              <td className="px-2.5 py-1.5 text-center font-mono text-slate-700 border-r border-slate-200 whitespace-nowrap">{eq?.itrisId || '-'}</td>
+                              <td className="px-2.5 py-1.5 font-medium text-slate-800 border-r border-slate-200 whitespace-nowrap">{eq?.name || 'เครื่องมือแพทย์'}</td>
+                              <td className="px-2.5 py-1.5 text-slate-600 border-r border-slate-200 whitespace-nowrap">{eq?.department || '-'}</td>
+                              <td className="px-2.5 py-1.5 text-slate-700 border-r border-slate-200 whitespace-nowrap">{eq?.manufacturer || '-'}</td>
+                              <td className="px-2.5 py-1.5 text-slate-700 border-r border-slate-200 whitespace-nowrap">{eq?.model || '-'}</td>
+                              <td className="px-2.5 py-1.5 font-mono text-slate-700 border-r border-slate-200 whitespace-nowrap">{eq?.serialNumber || '-'}</td>
+                              <td className="px-2.5 py-1.5 text-center border-r border-slate-200 whitespace-nowrap">
+                                <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-semibold whitespace-nowrap ${
                                   eq?.riskLevel === 'High' ? 'bg-rose-100 text-rose-700' :
                                   eq?.riskLevel === 'Medium' ? 'bg-amber-100 text-amber-700' :
                                   'bg-emerald-100 text-emerald-700'
                                 }`}>
-                                  {eq?.riskLevel || 'Low'}
+                                  {(eq?.riskLevel || 'Low').toUpperCase()}
                                 </span>
                               </td>
-                              <td className="p-1.5 text-center text-slate-600 border-r border-slate-200 text-[10px]">{c.frequency || '1 ปี'}</td>
+                              <td className="px-2 py-1.5 text-center text-slate-600 border-r border-slate-200 text-[10px] whitespace-nowrap">{c.frequency || '1 ปี'}</td>
                               {THAI_MONTHS_SHORT.map((_, mIdx) => {
-                                const isMonthActive = calMonth === mIdx + 1;
+                                const currentMonthNum = mIdx + 1;
+                                const isCalibratedThisMonth = lastMonth === currentMonthNum;
+                                const isPendingThisMonth = !isCalibratedThisMonth && nextMonth === currentMonthNum;
+
                                 return (
-                                  <td key={mIdx} className="p-1 text-center border-r border-slate-200">
-                                    {isMonthActive ? (
+                                  <td key={mIdx} className="p-1 text-center border-r border-slate-200 whitespace-nowrap">
+                                    {isCalibratedThisMonth ? (
                                       <span
-                                        className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                                          effectiveStatus === 'completed'
-                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                            : effectiveStatus === 'overdue'
-                                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
-                                            : 'bg-blue-100 text-blue-800 border border-blue-300'
-                                        }`}
-                                        title={`${effectiveStatus === 'completed' ? 'สอบเทียบแล้ว' : effectiveStatus === 'overdue' ? 'เลยกำหนด' : 'ตามแผน'}: ${formatDateSlash(c.nextDate)}`}
+                                        className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                        title={`สอบเทียบแล้ว: ${formatDateSlash(c.lastDate)}`}
                                       >
-                                        {effectiveStatus === 'completed' ? '✓' : effectiveStatus === 'overdue' ? '!' : 'P'}
+                                        ✓
+                                      </span>
+                                    ) : isPendingThisMonth ? (
+                                      <span
+                                        className="inline-block px-1.5 py-0.5 rounded text-[9px] font-bold bg-rose-100 text-rose-800 border border-rose-300"
+                                        title={`ยังไม่ได้ทำการสอบเทียบ (กำหนด: ${formatDateSlash(c.nextDate)})`}
+                                      >
+                                        !
                                       </span>
                                     ) : (
                                       <span className="text-slate-300">-</span>
@@ -1345,7 +1478,21 @@ export default function CalibrationView() {
                                   </td>
                                 );
                               })}
-                              <td className="p-1.5 text-slate-600 truncate max-w-[120px]">{c.agency || '-'}</td>
+                              <td className="px-2.5 py-1.5 text-slate-600 whitespace-nowrap border-r border-slate-200">{c.agency || '-'}</td>
+                              <td className="px-2 py-1 text-center whitespace-nowrap print:hidden">
+                                {canEdit ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleStartEdit(c)}
+                                    className="p-1.5 text-blue-600 hover:text-blue-800 hover:bg-blue-100 rounded-lg transition-colors cursor-pointer inline-flex items-center justify-center shadow-2xs"
+                                    title="แก้ไขข้อมูล"
+                                  >
+                                    <Pencil size={14} />
+                                  </button>
+                                ) : (
+                                  <span className="text-slate-300">-</span>
+                                )}
+                              </td>
                             </tr>
                           );
                         })

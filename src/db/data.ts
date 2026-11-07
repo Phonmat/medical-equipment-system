@@ -7,6 +7,8 @@ import {
   MAX_REGULAR_USERS_PER_FACILITY,
   ensureSuperAdminAccount,
   isProtectedSuperAdmin,
+  isCentralFacility,
+  isCentralAdmin,
   createFacilityUsageConfig,
 } from '../utils/accessControl.ts';
 import type { FacilityUsageConfig } from '../types.ts';
@@ -98,7 +100,7 @@ function ensureFacilityConfigs(
   const configs: Record<string, FacilityUsageConfig> = { ...(rawConfigs || {}) };
   const allFacs = new Set<string>(facilities || []);
   (users || []).forEach((u) => {
-    if (u?.facility && !isProtectedSuperAdmin(u) && u.facility !== 'ส่วนกลาง (Super Admin)') {
+    if (u?.facility && !isProtectedSuperAdmin(u) && !isCentralFacility(u.facility)) {
       allFacs.add(String(u.facility).trim());
     }
   });
@@ -146,10 +148,21 @@ function loadStore(): DataStoreShape {
             }))
           : [];
         const normalizedCalibrations = Array.isArray(parsed.calibrations)
-          ? parsed.calibrations.map((c: any) => ({
-              ...c,
-              lastDate: normalizeLastDateToOct2026(c.lastDate, '19'),
-            }))
+          ? parsed.calibrations.map((c: any) => {
+              const agency = (c.agency || '').trim();
+              const isInternalAgency =
+                !agency ||
+                agency === '-' ||
+                agency === 'ศูนย์เครื่องมือแพทย์' ||
+                agency === 'ITRIS' ||
+                agency === 'ศูนย์เครื่องมือแพทย์ / สถาบันมาตรวิทยา' ||
+                agency === 'สถาบันมาตรวิทยาแห่งชาติ / ผู้แทนจำหน่าย';
+              return {
+                ...c,
+                lastDate: normalizeLastDateToOct2026(c.lastDate, '19'),
+                agency: isInternalAgency ? 'ITRIS PM Team' : agency,
+              };
+            })
           : [];
 
         return {
@@ -417,7 +430,7 @@ export async function saveFacilityUsageConfig(config: FacilityUsageConfig) {
   if (!trimmed) {
     throw new Error('กรุณาระบุชื่อสถานประกอบการ');
   }
-  if (!store.facilities.includes(trimmed) && trimmed !== 'ส่วนกลาง (Super Admin)') {
+  if (!store.facilities.includes(trimmed) && !isCentralFacility(trimmed)) {
     store.facilities.push(trimmed);
   }
   const existing = store.facilityConfigs[trimmed];
@@ -454,7 +467,7 @@ export async function deleteFacilityByName(name: string) {
   }
   const beforeCount = store.users.length;
   store.users = store.users.filter((u) => {
-    if (isProtectedSuperAdmin(u)) return true;
+    if (isProtectedSuperAdmin(u) || isCentralAdmin(u)) return true;
     return String(u.facility || '').trim().toLowerCase() !== target;
   });
   const deletedUsersCount = beforeCount - store.users.length;
@@ -477,7 +490,12 @@ export async function saveAppUser(userItem: any) {
     };
   }
   const saved = upsertById(store.users, userItem);
-  if (saved.facility && saved.role !== 'Super Admin' && !store.facilities.includes(saved.facility)) {
+  if (
+    saved.facility &&
+    saved.role !== 'Super Admin' &&
+    !isCentralFacility(saved.facility) &&
+    !store.facilities.includes(saved.facility)
+  ) {
     store.facilities.push(saved.facility);
   }
   saveStore(store);

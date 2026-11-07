@@ -2,6 +2,7 @@ import type { AppUser, Equipment, FacilityUsageConfig, Role } from '../types.ts'
 
 export const SUPER_ADMIN_USERNAME = 'Phonmat';
 export const SUPER_ADMIN_PASSWORD = 'Phonmat55556666';
+export const CENTRAL_FACILITY_NAME = 'ส่วนกลาง';
 export const MAX_ADMINS_PER_FACILITY = 1;
 export const MAX_REGULAR_USERS_PER_FACILITY = 5;
 export const DEFAULT_FACILITY_USAGE_DAYS = 365;
@@ -12,6 +13,24 @@ export function isProtectedSuperAdmin(user?: Pick<AppUser, 'username' | 'role'> 
     user.username.trim().toLowerCase() === SUPER_ADMIN_USERNAME.toLowerCase() ||
     user.role === 'Super Admin'
   );
+}
+
+export function isCentralFacility(facility?: string | null): boolean {
+  const norm = (facility || '').trim().toLowerCase();
+  return (
+    norm === 'ส่วนกลาง' ||
+    norm === 'ส่วนกลาง (admin)' ||
+    norm === 'ส่วนกลาง (super admin)' ||
+    norm === 'ทุกสถานประกอบการ (ส่วนกลาง)'
+  );
+}
+
+export function isCentralAdmin(
+  user?: Pick<AppUser, 'username' | 'role' | 'facility'> | null
+): boolean {
+  if (!user) return false;
+  if (isProtectedSuperAdmin(user)) return false;
+  return user.role === 'Admin' && isCentralFacility(user.facility);
 }
 
 export function ensureSuperAdminAccount(users: AppUser[]): AppUser[] {
@@ -29,13 +48,29 @@ export function ensureSuperAdminAccount(users: AppUser[]): AppUser[] {
     createdAt: existingIdx >= 0 ? users[existingIdx].createdAt : new Date().toISOString(),
   };
 
+  let result: AppUser[];
   if (existingIdx >= 0) {
-    const copy = [...users];
-    copy[existingIdx] = canonicalSuperAdmin;
-    return copy;
+    result = [...users];
+    result[existingIdx] = canonicalSuperAdmin;
+  } else {
+    result = [canonicalSuperAdmin, ...users];
   }
 
-  return [canonicalSuperAdmin, ...users];
+  // Ensure Central Admin (Admin ส่วนกลาง) exists
+  const hasCentralAdmin = result.some((u) => isCentralAdmin(u));
+  if (!hasCentralAdmin) {
+    const centralAdmin: AppUser = {
+      id: 'central-admin-default',
+      username: 'Admin',
+      password: '1234',
+      role: 'Admin',
+      facility: CENTRAL_FACILITY_NAME,
+      createdAt: new Date().toISOString(),
+    };
+    result.splice(1, 0, centralAdmin);
+  }
+
+  return result;
 }
 
 export function getFacilityMaxRegularUsers(
@@ -199,7 +234,7 @@ export function filterEquipmentForUser(
 ): Equipment[] {
   if (!viewer || !viewer.username) return [];
 
-  if (isProtectedSuperAdmin(viewer)) {
+  if (isProtectedSuperAdmin(viewer) || isCentralAdmin(viewer)) {
     return equipment;
   }
 
@@ -228,7 +263,7 @@ export function filterRelatedRecordsByEquipment<
   viewer?: Pick<AppUser, 'username' | 'role' | 'facility' | 'team'> | null
 ): T[] {
   if (!viewer || !viewer.username) return [];
-  if (isProtectedSuperAdmin(viewer)) return records;
+  if (isProtectedSuperAdmin(viewer) || isCentralAdmin(viewer)) return records;
 
   const visibleEqIds = new Set(visibleEquipment.map((eq) => eq.id));
   const viewerFacility = (viewer.facility || '').trim().toLowerCase();
@@ -282,6 +317,10 @@ export function canDeleteUser(
 
   if (isProtectedSuperAdmin(viewer)) {
     return true;
+  }
+
+  if (isCentralAdmin(viewer)) {
+    return !isProtectedSuperAdmin(targetUser) && !isCentralAdmin(targetUser);
   }
 
   if (viewer.role === 'Admin') {
@@ -517,7 +556,7 @@ export function validateUserLogin(
     return {
       valid: true,
       user: superAdminUser,
-      resolvedFacility: trimmedFacility || superAdminUser.facility || 'ส่วนกลาง (Super Admin)',
+      resolvedFacility: superAdminUser.facility || 'ส่วนกลาง (Super Admin)',
     };
   }
 
@@ -527,6 +566,9 @@ export function validateUserLogin(
 
   const user = matchingUsers.find((u) => {
     const uFac = (u.facility || '').trim();
+    if (isCentralFacility(uFac) && isCentralFacility(trimmedFacility)) {
+      return true;
+    }
     return !uFac || uFac.toLowerCase() === trimmedFacility.toLowerCase();
   });
 
@@ -542,13 +584,18 @@ export function validateUserLogin(
   }
 
   const userFacility = (user.facility || '').trim();
-  const targetFacility = userFacility || trimmedFacility;
-  const usageStatus = getFacilityUsageStatus(facilityConfigs[targetFacility], referenceDateStr);
-  if (usageStatus.status === 'expired') {
-    return {
-      valid: false,
-      error: `สถานประกอบการ "${targetFacility}" หมดอายุการใช้งานแล้ว (เหลือ 0 วัน) กรุณาติดต่อผู้ดูแลระบบ`,
-    };
+  const targetFacility = isCentralFacility(userFacility)
+    ? CENTRAL_FACILITY_NAME
+    : userFacility || trimmedFacility;
+
+  if (!isCentralFacility(targetFacility)) {
+    const usageStatus = getFacilityUsageStatus(facilityConfigs[targetFacility], referenceDateStr);
+    if (usageStatus.status === 'expired') {
+      return {
+        valid: false,
+        error: `สถานประกอบการ "${targetFacility}" หมดอายุการใช้งานแล้ว (เหลือ 0 วัน) กรุณาติดต่อผู้ดูแลระบบ`,
+      };
+    }
   }
 
   return {

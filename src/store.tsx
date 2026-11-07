@@ -8,6 +8,8 @@ import {
   MAX_REGULAR_USERS_PER_FACILITY,
   ensureSuperAdminAccount,
   isProtectedSuperAdmin,
+  isCentralFacility,
+  isCentralAdmin,
   validateFacilityUserQuota,
   validateNewUsernameForFacility,
   filterEquipmentForUser,
@@ -36,6 +38,17 @@ export const DEFAULT_DEPARTMENTS = [
 export const DEFAULT_FACILITIES = [
   'โรงพยาบาลศูนย์การแพทย์'
 ];
+
+export interface ActiveUserSession {
+  userKey: string;
+  userId: string;
+  username: string;
+  facility: string;
+  ip: string;
+  clientId: string;
+  loginTime: number;
+  lastSeen: number;
+}
 
 interface AppState {
   equipment: Equipment[];
@@ -101,6 +114,8 @@ interface AppState {
   refreshData: () => Promise<void>;
   isDarkMode: boolean;
   toggleDarkMode: () => void;
+  activeSessions: ActiveUserSession[];
+  sessionClientId: string;
 }
 
 const AppContext = createContext<AppState | undefined>(undefined);
@@ -156,6 +171,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [loggedInFacility, setLoggedInFacility] = useState<string | null>(() => {
     return localStorage.getItem('app_user_facility') || null;
   });
+  const [sessionClientId] = useState<string>(() => {
+    const existing = sessionStorage.getItem('app_session_client_id');
+    if (existing) return existing;
+    const generated = crypto.randomUUID();
+    sessionStorage.setItem('app_session_client_id', generated);
+    return generated;
+  });
+  const [activeSessions, setActiveSessions] = useState<ActiveUserSession[]>([]);
   const [users, setUsers] = useState<AppUser[]>(() => {
     const saved = localStorage.getItem('app_users');
     if (saved) {
@@ -252,10 +275,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          return parsed.map((c: CalibrationPlan) => ({
-            ...c,
-            lastDate: normalizeLastDateToOct2026(c.lastDate, '19'),
-          }));
+          return parsed.map((c: CalibrationPlan) => {
+            const rawAgency = (c.agency || '').trim();
+            const agency = (!rawAgency || rawAgency === '-' || rawAgency === 'ศูนย์เครื่องมือแพทย์' || rawAgency === 'ITRIS' || rawAgency === 'ศูนย์เครื่องมือแพทย์ / สถาบันมาตรวิทยา' || rawAgency === 'สถาบันมาตรวิทยาแห่งชาติ / ผู้แทนจำหน่าย')
+              ? 'ITRIS PM Team'
+              : rawAgency;
+            return {
+              ...c,
+              lastDate: normalizeLastDateToOct2026(c.lastDate, '19'),
+              agency,
+            };
+          });
         }
       } catch (e) {}
     }
@@ -303,7 +333,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const exactMatch = users.find(
         u =>
           u.username.trim().toLowerCase() === normUser &&
-          (isProtectedSuperAdmin(u) || (u.facility || '').trim().toLowerCase() === normFac)
+          (isProtectedSuperAdmin(u) ||
+            (isCentralFacility(normFac) && isCentralAdmin(u)) ||
+            (u.facility || '').trim().toLowerCase() === normFac)
       );
       if (exactMatch) return exactMatch;
     }
@@ -313,6 +345,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const currentFacility = useMemo(() => {
     if (!currentUserObj) return loggedInFacility || null;
     if (isProtectedSuperAdmin(currentUserObj)) return 'ส่วนกลาง (Super Admin)';
+    if (isCentralAdmin(currentUserObj)) return 'ส่วนกลาง';
     return currentUserObj.facility || loggedInFacility || 'โรงพยาบาลศูนย์การแพทย์';
   }, [currentUserObj, loggedInFacility]);
 
@@ -477,8 +510,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         let needsPersist = false;
         const normalizedCalibrations = data.calibrations.map((c: CalibrationPlan) => {
           const normLast = normalizeLastDateToOct2026(c.lastDate, '19');
-          if (c.lastDate !== normLast) needsPersist = true;
-          return { ...c, lastDate: normLast };
+          const rawAgency = (c.agency || '').trim();
+          const normAgency = (!rawAgency || rawAgency === '-' || rawAgency === 'ศูนย์เครื่องมือแพทย์' || rawAgency === 'ITRIS' || rawAgency === 'ศูนย์เครื่องมือแพทย์ / สถาบันมาตรวิทยา' || rawAgency === 'สถาบันมาตรวิทยาแห่งชาติ / ผู้แทนจำหน่าย')
+            ? 'ITRIS PM Team'
+            : rawAgency;
+          if (c.lastDate !== normLast || c.agency !== normAgency) needsPersist = true;
+          return { ...c, lastDate: normLast, agency: normAgency };
         });
         setAllCalibrations(normalizedCalibrations);
         localStorage.setItem('app_calibrations', JSON.stringify(normalizedCalibrations));
@@ -510,6 +547,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (data.documents !== undefined && Array.isArray(data.documents)) {
         setAllDocuments(data.documents);
         localStorage.setItem('app_documents', JSON.stringify(data.documents));
+      }
+      if (data.activeSessions !== undefined && Array.isArray(data.activeSessions)) {
+        setActiveSessions(data.activeSessions);
       }
     } catch (err) {
       console.warn('Could not sync with backend:', err);
@@ -611,11 +651,79 @@ export function AppProvider({ children }: { children: ReactNode }) {
   };
   
   const logout = () => {
+    const userIdToLogout = currentUserObj?.id || '';
+    const usernameToLogout = currentUser || '';
+    const facilityToLogout = currentFacility || loggedInFacility || '';
+
     setIsAuthenticated(false);
     setCurrentUser(null);
     setUserRole(null);
     setLoggedInFacility(null);
+
+    if (usernameToLogout) {
+      setActiveSessions(prev =>
+        prev.filter(
+          s =>
+            !(
+              (userIdToLogout && s.userId === userIdToLogout) ||
+              (s.username.trim().toLowerCase() === usernameToLogout.trim().toLowerCase() &&
+                (usernameToLogout.trim().toLowerCase() === 'phonmat' ||
+                  s.facility.trim().toLowerCase() === facilityToLogout.trim().toLowerCase()))
+            )
+        )
+      );
+      fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          userId: userIdToLogout,
+          username: usernameToLogout,
+          facility: facilityToLogout,
+          clientId: sessionClientId,
+        }),
+      })
+        .then(res => res.json())
+        .then(data => {
+          if (data?.activeSessions && Array.isArray(data.activeSessions)) {
+            setActiveSessions(data.activeSessions);
+          }
+        })
+        .catch(() => {});
+    }
   };
+
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) return;
+
+    const sendHeartbeat = async () => {
+      try {
+        const res = await fetch('/api/auth/heartbeat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId: currentUserObj?.id || '',
+            username: currentUser,
+            facility: currentFacility || loggedInFacility || '',
+            clientId: sessionClientId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (data?.activeSessions && Array.isArray(data.activeSessions)) {
+          setActiveSessions(data.activeSessions);
+        }
+        if (res.status === 409 && data?.valid === false) {
+          setIsAuthenticated(false);
+          setCurrentUser(null);
+          setUserRole(null);
+          setLoggedInFacility(null);
+        }
+      } catch {}
+    };
+
+    sendHeartbeat();
+    const hbInterval = setInterval(sendHeartbeat, 10000);
+    return () => clearInterval(hbInterval);
+  }, [isAuthenticated, currentUser, currentUserObj?.id, currentFacility, loggedInFacility, sessionClientId]);
 
   const addEquipment = (eq: Omit<Equipment, 'id'>) => {
     const fallbackFac = facilities[0] || 'โรงพยาบาลศูนย์การแพทย์';
@@ -1367,7 +1475,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateEquipment, deleteEquipment, clearAllEquipment,
       addDepartment, deleteDepartment, addFacility, updateFacilityUsageDays, updateFacilityExpiryDate, updateFacilityMaxRegularUsers, deleteFacility,
       addUser, updateUsername, updateUserRole, updateUserFacility, updateUserPassword, updateUserTeam, updateUserAvatar, deleteUser,
-      login, logout, refreshData: syncFromBackend, isDarkMode, toggleDarkMode
+      login, logout, refreshData: syncFromBackend, isDarkMode, toggleDarkMode, activeSessions, sessionClientId
     }}>
       {children}
     </AppContext.Provider>

@@ -1,11 +1,13 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useAppStore } from '../store';
-import { ClipboardCheck, Pencil, Trash2, Plus, X, Check, AlertCircle, FileSpreadsheet, Search, Filter, Download, Printer } from 'lucide-react';
+import { ClipboardCheck, Pencil, Trash2, Plus, X, Check, AlertCircle, FileSpreadsheet, Search, Filter, Download, Printer, Calendar, ChevronDown, CalendarDays } from 'lucide-react';
 import { Equipment, MaintenancePlan, PlanStatus } from '../types';
 import { formatDateSlash, parseDateString, resolvePlanStatusByNextDate } from '../utils/dateUtils';
 import { printElement } from '../utils/printUtils';
 import EquipmentSearchSelect from '../components/EquipmentSearchSelect';
 import ImportMaintenanceModal from '../components/ImportMaintenanceModal';
+
+const THAI_MONTHS_SHORT = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 
 export default function MaintenanceView() {
   const { equipment, maintenances, addMaintenance, bulkAddMaintenance, updateMaintenance, deleteMaintenance, userRole, currentFacility } = useAppStore();
@@ -13,11 +15,28 @@ export default function MaintenanceView() {
   const canEdit = isAdmin || userRole === 'PM/CAL';
   const [isAdding, setIsAdding] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isPlanMenuOpen, setIsPlanMenuOpen] = useState(false);
+  const [isAnnualPlanModalOpen, setIsAnnualPlanModalOpen] = useState(false);
+  const [annualPlanYear, setAnnualPlanYear] = useState<number>(2026);
+  const [annualPlanDept, setAnnualPlanDept] = useState<string>('all');
+  const planMenuRef = useRef<HTMLDivElement>(null);
+  const annualPrintRef = useRef<HTMLDivElement>(null);
   const [editingPlan, setEditingPlan] = useState<MaintenancePlan | null>(null);
   const [planToDelete, setPlanToDelete] = useState<MaintenancePlan | null>(null);
   const [printingPlan, setPrintingPlan] = useState<MaintenancePlan | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const printRef = useRef<HTMLDivElement>(null);
+
+  // Close Plan Menu on outside click
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (planMenuRef.current && !planMenuRef.current.contains(event.target as Node)) {
+        setIsPlanMenuOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Search & Filter state
   const [searchTerm, setSearchTerm] = useState('');
@@ -220,6 +239,109 @@ export default function MaintenanceView() {
     });
   };
 
+  // Annual Plan Filtered List
+  const annualPlanMaintenances = useMemo(() => {
+    return maintenances.filter(m => {
+      const eq = equipmentMap.get(m.equipmentId) || equipment.find(e => e.id === m.equipmentId);
+      if (annualPlanDept !== 'all') {
+        const eqDept = (eq?.department || '').trim();
+        if (eqDept !== annualPlanDept) return false;
+      }
+      return true;
+    });
+  }, [maintenances, equipmentMap, equipment, annualPlanDept]);
+
+  const handleExportAllMaintenances = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const exportRows = filteredMaintenances.map((m, idx) => {
+        const eq = equipmentMap.get(m.equipmentId) || equipment.find(e => e.id === m.equipmentId);
+        const eqCode = eq?.code || (m.equipmentId.startsWith('auto-code-') ? m.equipmentId.replace('auto-code-', '') : m.equipmentId);
+        const effectiveStatus = resolvePlanStatusByNextDate(m.nextDate, m.status);
+        return {
+          'ลำดับ': idx + 1,
+          'รหัสเครื่องมือ': eqCode,
+          'ชื่อเครื่องมือ': eq?.name || 'เครื่องมือแพทย์',
+          'แผนก': eq?.department || '-',
+          'ผู้ผลิต (Manufacturer)': eq?.manufacturer || '-',
+          'รุ่น (Model)': eq?.model || '-',
+          'หมายเลขเครื่อง (S/N)': eq?.serialNumber || '-',
+          'ระดับความเสี่ยง': eq?.riskLevel || '-',
+          'รอบการบำรุงรักษา': m.frequency || '-',
+          'วันที่บำรุงรักษาล่าสุด': formatDateSlash(m.lastDate),
+          'วันที่บำรุงรักษาครั้งถัดไป': formatDateSlash(m.nextDate),
+          'สถานะ': getStatusLabel(effectiveStatus),
+          'ช่างผู้รับผิดชอบ': m.technician || '-',
+          'หมายเหตุ': m.notes || '-',
+        };
+      });
+      const ws = XLSX.utils.json_to_sheet(exportRows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'แผนการบำรุงรักษาทั้งหมด');
+      XLSX.writeFile(wb, `Maintenance_Plan_${new Date().toISOString().split('T')[0]}.xlsx`);
+      setSuccessMessage('ส่งออกข้อมูลแผนการบำรุงรักษาทั้งหมดสำเร็จ');
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      console.error('Failed to export maintenances:', err);
+    }
+  };
+
+  const handlePrintAnnualPlan = () => {
+    if (!annualPrintRef.current) return;
+    printElement(annualPrintRef.current, {
+      documentTitle: `แผนการบำรุงรักษาเครื่องมือแพทย์ประจำปี_${annualPlanYear}`,
+      pageOrientation: 'landscape',
+      pageMargin: '8mm',
+    });
+  };
+
+  const handleExportAnnualPlan = async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const rows = annualPlanMaintenances.map((m, idx) => {
+        const eq = equipmentMap.get(m.equipmentId) || equipment.find(e => e.id === m.equipmentId);
+        const eqCode = eq?.code || (m.equipmentId.startsWith('auto-code-') ? m.equipmentId.replace('auto-code-', '') : m.equipmentId);
+
+        const row: Record<string, any> = {
+          'ลำดับ': idx + 1,
+          'รหัสเครื่องมือ': eqCode,
+          'ชื่อเครื่องมือ': eq?.name || 'เครื่องมือแพทย์',
+          'แผนก': eq?.department || '-',
+          'ความเสี่ยง': eq?.riskLevel || '-',
+          'รอบการบำรุงรักษา': m.frequency || '-',
+          'บำรุงรักษาล่าสุด': formatDateSlash(m.lastDate),
+          'กำหนดครั้งถัดไป': formatDateSlash(m.nextDate),
+        };
+
+        const nextDateStr = m.nextDate || '';
+        const pmYear = nextDateStr ? parseInt(nextDateStr.substring(0, 4), 10) : null;
+        const pmMonth = (pmYear === annualPlanYear && nextDateStr) ? parseInt(nextDateStr.substring(5, 7), 10) : null;
+        const effectiveStatus = resolvePlanStatusByNextDate(m.nextDate, m.status);
+
+        THAI_MONTHS_SHORT.forEach((mName, mIdx) => {
+          if (pmMonth === mIdx + 1) {
+            row[mName] = effectiveStatus === 'completed' ? 'บำรุงรักษาแล้ว' : (effectiveStatus === 'overdue' ? 'เลยกำหนด' : 'แผน');
+          } else {
+            row[mName] = '';
+          }
+        });
+
+        row['ช่างผู้รับผิดชอบ'] = m.technician || '-';
+        row['หมายเหตุ'] = m.notes || '-';
+        return row;
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, `แผนบำรุงรักษา_${annualPlanYear}`);
+      XLSX.writeFile(wb, `Maintenance_Annual_Plan_${annualPlanYear}.xlsx`);
+      setSuccessMessage(`ดาวน์โหลดไฟล์ตารางแผนการบำรุงรักษาประจำปี ${annualPlanYear} สำเร็จ`);
+      setTimeout(() => setSuccessMessage(null), 3000);
+    } catch (err) {
+      console.error('Failed to export annual maintenance plan:', err);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Success Notification */}
@@ -238,27 +360,91 @@ export default function MaintenanceView() {
             จัดการและติดตามแผนการบำรุงรักษาเครื่องมือแพทย์ (PM) ({maintenances.length} รายการ)
           </p>
         </div>
-        {canEdit && (
-          <div className="flex items-center flex-wrap gap-2.5">
-            <button
-              type="button"
-              onClick={() => setIsImportModalOpen(true)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center space-x-1.5 shadow-2xs cursor-pointer"
-              title="นำเข้าข้อมูลแผนการบำรุงรักษาเครื่องมือจากไฟล์ Excel (.xlsx / .xls)"
-            >
-              <FileSpreadsheet size={16} />
-              <span>นำเข้าข้อมูล</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setIsAdding(!isAdding)}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center space-x-2 shadow-2xs cursor-pointer"
-            >
-              <Plus size={18} />
-              <span>{isAdding ? 'ยกเลิก' : 'เพิ่มแผนการบำรุงรักษา'}</span>
-            </button>
-          </div>
-        )}
+
+        {/* เมนูแผนการบำรุงรักษา (แทนที่ 2 ปุ่มเดิม: นำเข้าข้อมูล และ เพิ่มแผนการบำรุงรักษา) */}
+        <div className="relative" ref={planMenuRef}>
+          <button
+            type="button"
+            onClick={() => setIsPlanMenuOpen(!isPlanMenuOpen)}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center justify-center space-x-2 shadow-2xs cursor-pointer"
+            title="เปิดเมนูแผนการบำรุงรักษาเครื่องมือแพทย์"
+          >
+            <Calendar size={18} />
+            <span>แผนการบำรุงรักษา</span>
+            <ChevronDown size={16} className={`transition-transform duration-200 ${isPlanMenuOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {isPlanMenuOpen && (
+            <div className="absolute right-0 mt-2 w-72 bg-white rounded-xl shadow-xl border border-slate-200 py-2 z-40 animate-in fade-in zoom-in-95 duration-150">
+              <div className="px-4 py-1 text-[10.5px] font-bold text-slate-400 uppercase tracking-wider">
+                เมนูแผนการบำรุงรักษา
+              </div>
+
+              {/* 1. เปิดดูตารางแผนการบำรุงรักษาประจำปี 12 เดือน */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlanMenuOpen(false);
+                  setIsAnnualPlanModalOpen(true);
+                }}
+                className="w-full text-left px-4 py-2.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 flex items-center space-x-3 transition-colors cursor-pointer group"
+              >
+                <div className="p-1.5 bg-blue-100 text-blue-600 rounded-lg group-hover:bg-blue-600 group-hover:text-white transition-colors shrink-0">
+                  <CalendarDays size={16} />
+                </div>
+                <div>
+                  <div className="font-semibold text-slate-800 group-hover:text-blue-700">ตารางแผนการบำรุงรักษาประจำปี</div>
+                  <div className="text-[11px] text-slate-400">ดูแผนรายเดือน 12 เดือน ม.ค. - ธ.ค. และสั่งพิมพ์ A4</div>
+                </div>
+              </button>
+
+              <div className="border-t border-slate-100 my-1"></div>
+
+              {canEdit && (
+                <>
+                  {/* 2. เพิ่มแผนการบำรุงรักษาใหม่ */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlanMenuOpen(false);
+                      setIsAdding(!isAdding);
+                    }}
+                    className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2.5 transition-colors cursor-pointer"
+                  >
+                    <Plus size={16} className="text-blue-600 shrink-0" />
+                    <span>{isAdding ? 'ปิดฟอร์มเพิ่มแผน' : 'เพิ่มแผนการบำรุงรักษาใหม่'}</span>
+                  </button>
+
+                  {/* 3. นำเข้าข้อมูล Excel */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsPlanMenuOpen(false);
+                      setIsImportModalOpen(true);
+                    }}
+                    className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2.5 transition-colors cursor-pointer"
+                  >
+                    <FileSpreadsheet size={16} className="text-emerald-600 shrink-0" />
+                    <span>นำเข้าข้อมูลแผนจาก Excel (.xlsx)</span>
+                  </button>
+                </>
+              )}
+
+              {/* 4. ส่งออกแผนทั้งหมดเป็น Excel */}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsPlanMenuOpen(false);
+                  handleExportAllMaintenances();
+                }}
+                className="w-full text-left px-4 py-2 text-xs text-slate-700 hover:bg-slate-50 flex items-center space-x-2.5 transition-colors cursor-pointer"
+              >
+                <Download size={16} className="text-slate-500 shrink-0" />
+                <span>ส่งออกข้อมูลแผนการบำรุงรักษา (Excel)</span>
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Search & Filter Bar with 1. Risk Filter and 2. Department Filter */}
@@ -447,11 +633,11 @@ export default function MaintenanceView() {
           <table className="w-full text-left border-separate border-spacing-0 text-sm">
             <thead className="bg-slate-50 sticky top-0 z-10 shadow-xs">
               <tr className="border-b border-slate-200 text-slate-600">
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">รหัสเครื่องมือ</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">ชื่อเครื่องมือ</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">แผนก</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">รอบการบำรุงรักษา</th>
-                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200">ล่าสุด / ครั้งถัดไป</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">รหัสเครื่องมือ</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">ชื่อเครื่องมือ</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">แผนก</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">รอบการบำรุงรักษา</th>
+                <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap">ล่าสุด / ครั้งถัดไป</th>
                 <th className="px-6 py-4 font-medium bg-slate-50 border-b border-slate-200 whitespace-nowrap min-w-[120px]">สถานะ</th>
                 <th className="px-6 py-4 font-medium text-right bg-slate-50 border-b border-slate-200 sticky right-0 top-0 z-20 whitespace-nowrap">จัดการ</th>
               </tr>
@@ -461,8 +647,8 @@ export default function MaintenanceView() {
                 const eq = equipmentMap.get(m.equipmentId) || equipment.find(e => e.id === m.equipmentId);
                 return (
                   <tr key={m.id} className="hover:bg-slate-50/50 transition-colors">
-                    <td className="px-6 py-4 font-mono font-semibold text-slate-900">
-                      <div className="flex items-center space-x-1.5">
+                    <td className="px-6 py-4 font-mono font-semibold text-slate-900 whitespace-nowrap">
+                      <div className="flex items-center space-x-1.5 whitespace-nowrap">
                         <span>{eq?.code || (m.equipmentId.startsWith('auto-code-') ? m.equipmentId.replace('auto-code-', '') : 'Unknown')}</span>
                         {eq?.riskLevel === 'High' && (
                           <span className="text-[10px] px-1.5 py-0.5 bg-rose-100 text-rose-700 font-bold rounded font-sans">High</span>
@@ -472,13 +658,13 @@ export default function MaintenanceView() {
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 text-slate-800 font-medium">
+                    <td className="px-6 py-4 text-slate-800 font-medium whitespace-nowrap">
                       <div>{eq?.name || 'เครื่องมือแพทย์'}</div>
                       {m.technician && <div className="text-xs text-slate-400">ช่าง: {m.technician}</div>}
                     </td>
-                    <td className="px-6 py-4 text-slate-500">{eq?.department || '-'}</td>
-                    <td className="px-6 py-4 text-slate-700">{m.frequency}</td>
-                    <td className="px-6 py-4 text-xs font-mono">
+                    <td className="px-6 py-4 text-slate-500 whitespace-nowrap">{eq?.department || '-'}</td>
+                    <td className="px-6 py-4 text-slate-700 whitespace-nowrap">{m.frequency}</td>
+                    <td className="px-6 py-4 text-xs font-mono whitespace-nowrap">
                       <div className="text-slate-600">ล่าสุด: {formatDateSlash(m.lastDate)}</div>
                       <div className="text-blue-600 font-semibold">ถัดไป: {formatDateSlash(m.nextDate)}</div>
                     </td>
@@ -924,6 +1110,232 @@ export default function MaintenanceView() {
             setTimeout(() => setSuccessMessage(null), 4000);
           }}
         />
+      )}
+
+      {/* Annual Maintenance Master Plan Modal (ตารางแผนการบำรุงรักษาประจำปี 12 เดือน) */}
+      {isAnnualPlanModalOpen && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-6xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+            {/* Modal Header */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between px-6 py-4 bg-slate-900 text-white gap-3 shrink-0">
+              <div className="flex items-center space-x-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600/30 border border-blue-500/30 text-blue-400 flex items-center justify-center">
+                  <CalendarDays size={22} />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">แผนการบำรุงรักษาเครื่องมือแพทย์ประจำปี (PM Master Plan)</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    ตารางแผนการดำเนินงานรายเดือน (ม.ค. - ธ.ค. {annualPlanYear}) • ทั้งหมด {annualPlanMaintenances.length} รายการ
+                  </p>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center space-x-2">
+                <button
+                  type="button"
+                  onClick={handleExportAnnualPlan}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                  title="ดาวน์โหลดตารางแผน 12 เดือนเป็นไฟล์ Excel"
+                >
+                  <Download size={14} />
+                  <span>ดาวน์โหลด Excel</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handlePrintAnnualPlan}
+                  className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer shadow-xs"
+                  title="สั่งพิมพ์ตารางแผนการบำรุงรักษาประจำปี A4 แนวนอน"
+                >
+                  <Printer size={14} />
+                  <span>พิมพ์แผน (Print A4)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setIsAnnualPlanModalOpen(false)}
+                  className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg cursor-pointer transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            {/* Filter Bar */}
+            <div className="bg-slate-50 border-b border-slate-200 px-6 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+              <div className="flex items-center space-x-4">
+                {/* เลือกปี */}
+                <div className="flex items-center space-x-2">
+                  <span className="font-semibold text-slate-700">ประจำปี:</span>
+                  <select
+                    value={annualPlanYear}
+                    onChange={(e) => setAnnualPlanYear(parseInt(e.target.value, 10))}
+                    className="border border-slate-300 bg-white rounded-lg px-2.5 py-1 text-xs font-bold text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
+                  >
+                    {[2024, 2025, 2026, 2027, 2028].map(y => (
+                      <option key={y} value={y}>ปี ค.ศ. {y} (พ.ศ. {y + 543})</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* เลือกแผนก */}
+                <div className="flex items-center space-x-2">
+                  <span className="font-semibold text-slate-700">แผนก:</span>
+                  <select
+                    value={annualPlanDept}
+                    onChange={(e) => setAnnualPlanDept(e.target.value)}
+                    className="border border-slate-300 bg-white rounded-lg px-2.5 py-1 text-xs text-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer max-w-[200px] truncate"
+                  >
+                    <option value="all">ทุกแผนก ({allDepartments.length})</option>
+                    {allDepartments.map(d => (
+                      <option key={d} value={d}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Status Legend */}
+              <div className="flex items-center space-x-3 text-[11px]">
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+                  <span className="text-slate-600">บำรุงรักษาแล้ว</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span>
+                  <span className="text-slate-600">เลยกำหนด</span>
+                </span>
+                <span className="flex items-center space-x-1">
+                  <span className="w-2.5 h-2.5 rounded-full bg-blue-500"></span>
+                  <span className="text-slate-600">วางแผนไว้</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Modal Body / Scrollable Table */}
+            <div className="p-6 overflow-y-auto bg-slate-100 flex-1">
+              <div
+                ref={annualPrintRef}
+                className="bg-white p-6 rounded-xl shadow-xs border border-slate-200 text-slate-900"
+              >
+                {/* Print Header */}
+                <div className="border-b-2 border-slate-900 pb-3 mb-4 flex items-start justify-between">
+                  <div>
+                    <h2 className="text-lg font-bold text-slate-900">
+                      แผนการบำรุงรักษาเครื่องมือแพทย์ประจำปี {annualPlanYear} (PM Master Plan)
+                    </h2>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      {currentFacility && currentFacility !== 'ส่วนกลาง (Super Admin)' && currentFacility !== 'ส่วนกลาง' ? currentFacility : 'โรงพยาบาล / ศูนย์การแพทย์'}
+                      {annualPlanDept !== 'all' ? ` • แผนก: ${annualPlanDept}` : ' • ทุกแผนก'}
+                    </p>
+                  </div>
+                  <div className="text-right text-[11px] text-slate-500 font-mono">
+                    <div>วันที่ออกเอกสาร: {new Date().toLocaleDateString('th-TH', { year: 'numeric', month: 'long', day: 'numeric' })}</div>
+                    <div className="text-slate-400">เอกสารควบคุมคุณภาพเครื่องมือแพทย์</div>
+                  </div>
+                </div>
+
+                {/* 12-Month Master Schedule Matrix */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse border border-slate-300 text-[11px]">
+                    <thead className="bg-slate-100 text-slate-800 font-bold border-b border-slate-300">
+                      <tr>
+                        <th className="p-1.5 border-r border-slate-300 text-center w-10 whitespace-nowrap">#</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">รหัสเครื่อง</th>
+                        <th className="p-1.5 border-r border-slate-300 min-w-[140px] whitespace-nowrap">ชื่อเครื่องมือ</th>
+                        <th className="p-1.5 border-r border-slate-300 whitespace-nowrap">แผนก</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center whitespace-nowrap">ความเสี่ยง</th>
+                        <th className="p-1.5 border-r border-slate-300 text-center whitespace-nowrap">รอบ PM</th>
+                        {THAI_MONTHS_SHORT.map((m, idx) => (
+                          <th key={idx} className="p-1.5 border-r border-slate-300 text-center w-10 text-[10px] whitespace-nowrap">
+                            {m}
+                          </th>
+                        ))}
+                        <th className="p-1.5 whitespace-nowrap">ช่างผู้รับผิดชอบ</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {annualPlanMaintenances.length === 0 ? (
+                        <tr>
+                          <td colSpan={19} className="p-8 text-center text-slate-400">
+                            ไม่พบรายการแผนการบำรุงรักษาในแผนกที่เลือก
+                          </td>
+                        </tr>
+                      ) : (
+                        annualPlanMaintenances.map((m, idx) => {
+                          const eq = equipmentMap.get(m.equipmentId) || equipment.find(e => e.id === m.equipmentId);
+                          const eqCode = eq?.code || (m.equipmentId.startsWith('auto-code-') ? m.equipmentId.replace('auto-code-', '') : m.equipmentId);
+                          const effectiveStatus = resolvePlanStatusByNextDate(m.nextDate, m.status);
+
+                          const nextDateStr = m.nextDate || '';
+                          const pmYear = nextDateStr ? parseInt(nextDateStr.substring(0, 4), 10) : null;
+                          const pmMonth = (pmYear === annualPlanYear && nextDateStr) ? parseInt(nextDateStr.substring(5, 7), 10) : null;
+
+                          return (
+                            <tr key={m.id} className="hover:bg-slate-50 transition-colors">
+                              <td className="px-2 py-1.5 text-center font-mono border-r border-slate-200 text-slate-500 whitespace-nowrap">{idx + 1}</td>
+                              <td className="px-2.5 py-1.5 font-mono font-bold text-slate-900 border-r border-slate-200 whitespace-nowrap">{eqCode}</td>
+                              <td className="px-2.5 py-1.5 font-medium text-slate-800 border-r border-slate-200 whitespace-nowrap">{eq?.name || 'เครื่องมือแพทย์'}</td>
+                              <td className="px-2.5 py-1.5 text-slate-600 border-r border-slate-200 whitespace-nowrap">{eq?.department || '-'}</td>
+                              <td className="px-2 py-1.5 text-center border-r border-slate-200 whitespace-nowrap">
+                                <span className={`px-1.5 py-0.5 rounded text-[9.5px] font-semibold whitespace-nowrap ${
+                                  eq?.riskLevel === 'High' ? 'bg-rose-100 text-rose-700' :
+                                  eq?.riskLevel === 'Medium' ? 'bg-amber-100 text-amber-700' :
+                                  'bg-emerald-100 text-emerald-700'
+                                }`}>
+                                  {eq?.riskLevel || 'Low'}
+                                </span>
+                              </td>
+                              <td className="px-2 py-1.5 text-center text-slate-600 border-r border-slate-200 text-[10px] whitespace-nowrap">{m.frequency || '1 ปี'}</td>
+                              {THAI_MONTHS_SHORT.map((_, mIdx) => {
+                                const isMonthActive = pmMonth === mIdx + 1;
+                                return (
+                                  <td key={mIdx} className="p-1 text-center border-r border-slate-200 whitespace-nowrap">
+                                    {isMonthActive ? (
+                                      <span
+                                        className={`inline-block px-1.5 py-0.5 rounded text-[9px] font-bold ${
+                                          effectiveStatus === 'completed'
+                                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                                            : effectiveStatus === 'overdue'
+                                            ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                                            : 'bg-blue-100 text-blue-800 border border-blue-300'
+                                        }`}
+                                        title={`${effectiveStatus === 'completed' ? 'บำรุงรักษาแล้ว' : effectiveStatus === 'overdue' ? 'เลยกำหนด' : 'ตามแผน'}: ${formatDateSlash(m.nextDate)}`}
+                                      >
+                                        {effectiveStatus === 'completed' ? '✓' : effectiveStatus === 'overdue' ? '!' : 'P'}
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-300">-</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                              <td className="px-2.5 py-1.5 text-slate-600 whitespace-nowrap">{m.technician || '-'}</td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Print Signatures */}
+                <div className="mt-8 pt-4 border-t border-slate-300 grid grid-cols-2 gap-8 text-center text-xs text-slate-600">
+                  <div>
+                    <div className="mb-6 border-b border-dashed border-slate-400 w-48 mx-auto h-6"></div>
+                    <div className="font-semibold text-slate-800">วิศวกรชีวการแพทย์ / ผู้จัดทำแผน</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">วันที่ ........../........../..........</div>
+                  </div>
+                  <div>
+                    <div className="mb-6 border-b border-dashed border-slate-400 w-48 mx-auto h-6"></div>
+                    <div className="font-semibold text-slate-800">หัวหน้าฝ่ายเครื่องมือแพทย์ / ผู้อนุมัติ</div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">วันที่ ........../........../..........</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

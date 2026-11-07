@@ -23,7 +23,7 @@ export default function EditEquipmentModal({
   isAdmin
 }: EditEquipmentModalProps) {
   const { users, facilities, userRole, currentUser, currentFacility } = useAppStore();
-  const isSuperAdmin = userRole === 'Super Admin';
+  const isSuperAdmin = userRole === 'Super Admin' || (userRole === 'Admin' && (currentFacility === 'ส่วนกลาง' || currentFacility === 'ส่วนกลาง (Super Admin)'));
   const [formData, setFormData] = useState({
     code: '',
     name: '',
